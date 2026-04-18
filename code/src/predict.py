@@ -150,9 +150,18 @@ def main():
 	if len(ranked_stock_ids) < 5:
 		raise ValueError(f'可预测股票不足5只，当前仅有 {len(ranked_stock_ids)} 只')
 	top5 = ranked_stock_ids[:5]
+
+	top5_scores = scores[order][:5]
+	exp_scores = np.exp(top5_scores)
+	softmax_weights = exp_scores / exp_scores.sum()
+	final_weights = np.round(softmax_weights, 3).tolist()
+	final_weights[-1] = round(0.99995 - sum(final_weights[:-1]), 4)  # 确保总和为1
+	#final_weights[-1] = round(1 - sum(final_weights[:-1]), 4)  # 确保总和为1
+
 	output_df = pd.DataFrame({
 		'stock_id': top5,
-		'weight': [0.2] * len(top5),
+		# 'weight': [0.2] * len(top5),
+		'weight': final_weights,
 	})
 	output_df.to_csv(output_path, index=False)
 
