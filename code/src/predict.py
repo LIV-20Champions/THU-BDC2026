@@ -92,7 +92,34 @@ def build_inference_sequences(data, features, sequence_length, stock_ids, latest
 
 	return np.asarray(sequences, dtype=np.float32), sequence_stock_ids
 
-
+def allocate_weights(ranked_stock_ids, ranked_scores):
+    """
+    进阶权重分配逻辑
+    """
+    # 1. 基础参数：排名衰减权重 (可以根据你的实验微调这组数字)
+    # 这组数字通常比 Softmax 更能在测试集拿高分
+    base_weights = np.array([0.35, 0.25, 0.18, 0.12, 0.10])
+    
+    # 2. 结合模型信心（可选）：如果第一名和第二名分差极大，给第一名加码
+    score_gap = ranked_scores[0] - ranked_scores[1]
+    if score_gap > 0.1: # 假设 0.1 是一个显著差距
+        base_weights[0] += 0.05
+        base_weights[4] -= 0.05
+    
+    # 3. 仓位控制：如果前5名平均分太低，整体打 8 折（留现金躲大跌）
+    # 注意：这里的 threshold 需要根据你 model 输出的实际打分范围定
+    if np.mean(ranked_scores[:5]) < 0.0: 
+        base_weights = base_weights * 0.8
+        
+    # 4. 保险：精度处理与求和校准
+    final_weights = np.round(base_weights, 4).tolist()
+    # 确保总和绝对不超过 1.0 (根据你的目标总权重设定，如 1.0 或 0.8)
+    target_sum = round(sum(final_weights), 4) 
+    if target_sum > 1.0:
+         # 如果超标了，从权重最大的那一项扣除溢出部分
+         final_weights[0] = round(final_weights[0] - (target_sum - 1.0), 4)
+    
+    return final_weights
 def main():
 	data_file = os.path.join(config['data_path'], 'train.csv')
 	model_path = os.path.join(config['output_dir'], 'best_model.pth')
@@ -152,10 +179,11 @@ def main():
 	top5 = ranked_stock_ids[:5]
 
 	top5_scores = scores[order][:5]
-	exp_scores = np.exp(top5_scores)
-	softmax_weights = exp_scores / exp_scores.sum()
-	final_weights = np.round(softmax_weights, 3).tolist()
-	final_weights[-1] = round(0.99995 - sum(final_weights[:-1]), 4)  # 确保总和为1
+	final_weights = allocate_weights(top5, top5_scores)
+	# exp_scores = np.exp(top5_scores)
+	# softmax_weights = exp_scores / exp_scores.sum()
+	# final_weights = np.round(softmax_weights, 3).tolist()
+	# final_weights[-1] = round(0.99995 - sum(final_weights[:-1]), 4)  # 确保总和为1
 	#final_weights[-1] = round(1 - sum(final_weights[:-1]), 4)  # 确保总和为1
 
 	output_df = pd.DataFrame({
