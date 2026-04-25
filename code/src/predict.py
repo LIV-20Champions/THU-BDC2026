@@ -102,39 +102,106 @@ def build_inference_sequences(data, features, sequence_length, stock_ids, latest
 
 	return np.asarray(sequences, dtype=np.float32), sequence_stock_ids
 
-def allocate_weights(ranked_stock_ids, ranked_scores):
-    """
-    进阶权重分配逻辑
-    """
-    # 1. 基础参数：排名衰减权重 (可以根据你的实验微调这组数字)
-    # 这组数字通常比 Softmax 更能在测试集拿高分
-    base_weights = np.array([0.35, 0.25, 0.18, 0.12, 0.10])
-    
-    # 2. 结合模型信心（可选）：如果第一名和第二名分差极大，给第一名加码
-    score_gap = ranked_scores[0] - ranked_scores[1]
-    if score_gap > 0.1: # 假设 0.1 是一个显著差距
-        base_weights[0] += 0.05
-        base_weights[4] -= 0.05
-    
-    # 3. 仓位控制：如果前5名平均分太低，整体打 8 折（留现金躲大跌）
-    # 注意：这里的 threshold 需要根据你 model 输出的实际打分范围定
-    if np.mean(ranked_scores[:5]) < 0.0: 
-        base_weights = base_weights * 0.8
-        
-    # 4. 保险：精度处理与求和校准
-    final_weights = np.round(base_weights, 4).tolist()
-    # 确保总和绝对不超过 1.0 (根据你的目标总权重设定，如 1.0 或 0.8)
-    target_sum = round(sum(final_weights), 4) 
-    if target_sum > 1.0:
-         # 如果超标了，从权重最大的那一项扣除溢出部分
-         final_weights[0] = round(final_weights[0] - (target_sum - 1.0), 4)
-    
-    return final_weights
+
+
+def _normalize_weights(weights):
+	weights = np.asarray(weights, dtype=np.float64)
+	if weights.ndim != 1 or weights.size == 0:
+		raise ValueError('weights 必须是一维且非空')
+	if not np.all(np.isfinite(weights)):
+		raise ValueError('weights 中存在非有限值')
+	if weights.sum() <= 0:
+		raise ValueError('weights 权重和必须大于 0')
+
+	weights = weights / weights.sum()
+	weights = np.round(weights, 4)
+
+	# 避免四舍五入后权重和不是 1.0。
+	diff = round(1.0 - float(weights.sum()), 4)
+	weights[-1] = round(float(weights[-1]) + diff, 4)
+
+	# 再做一次保护，防止最后一项因为校准变成负数。
+	if weights[-1] < 0:
+		weights[0] = round(float(weights[0]) + float(weights[-1]), 4)
+		weights[-1] = 0.0
+
+	return weights.tolist()
+
+
+def _softmax_weights(scores, temperature):
+	scores = np.asarray(scores, dtype=np.float64)
+	temperature = max(float(temperature), 1e-8)
+	shifted = scores / temperature
+	shifted = shifted - np.max(shifted)
+	weights = np.exp(shifted)
+	return _normalize_weights(weights)
+
+
+def select_and_allocate_weights(ranked_stock_ids, ranked_scores):
+	"""
+	根据 config 中的 predict_weight_mode 选择股票数量和分配权重。
+
+	支持：
+	- equal: 前 predict_top_k 只等权，默认前5只
+	- rank_decay: 前 predict_top_k 只按固定递减权重
+	- top3: 只买前三
+	- top1: 只买第一
+	- softmax: 前 predict_top_k 只按模型分数 softmax 分配权重
+	"""
+	mode = config.get('predict_weight_mode', 'equal')
+	max_k = min(int(config.get('predict_top_k', 5)), 5, len(ranked_stock_ids))
+
+	if max_k <= 0:
+		raise ValueError('没有可用于输出的股票')
+
+	ranked_scores = np.asarray(ranked_scores, dtype=np.float64)
+
+	if mode == 'equal':
+		k = max_k
+		selected_ids = ranked_stock_ids[:k]
+		weights = _normalize_weights(np.ones(k, dtype=np.float64))
+
+	elif mode == 'rank_decay':
+		k = max_k
+		selected_ids = ranked_stock_ids[:k]
+		base_weights = np.asarray(
+			config.get('predict_rank_weights', [0.30, 0.25, 0.20, 0.15, 0.10]),
+			dtype=np.float64,
+		)[:k]
+		weights = _normalize_weights(base_weights)
+
+	elif mode == 'top3':
+		k = min(3, len(ranked_stock_ids))
+		selected_ids = ranked_stock_ids[:k]
+		base_weights = np.asarray(
+			config.get('predict_top3_weights', [0.45, 0.35, 0.20]),
+			dtype=np.float64,
+		)[:k]
+		weights = _normalize_weights(base_weights)
+
+	elif mode == 'top1':
+		selected_ids = ranked_stock_ids[:1]
+		weights = [1.0]
+
+	elif mode == 'softmax':
+		k = max_k
+		selected_ids = ranked_stock_ids[:k]
+		temperature = float(config.get('predict_weight_temperature', 0.5))
+		weights = _softmax_weights(ranked_scores[:k], temperature)
+
+	else:
+		raise ValueError(f'未知 predict_weight_mode: {mode}')
+
+	return selected_ids, weights
+
+
 def main():
 	data_file = os.path.join(config['data_path'], 'train.csv')
 	model_path = os.path.join(config['output_dir'], 'best_model.pth')
 	scaler_path = os.path.join(config['output_dir'], 'scaler.pkl')
-	output_path = os.path.join('./output/', 'result.csv')
+	output_dir = './output/'
+	output_path = os.path.join(output_dir, 'result.csv')
+	ranked_scores_path = os.path.join(output_dir, 'ranked_scores.csv')
 
 	if not os.path.exists(model_path):
 		raise FileNotFoundError(f'未找到模型文件: {model_path}')
@@ -190,34 +257,39 @@ def main():
 				stock_mask=stock_mask,
 			).squeeze(0).detach().cpu().numpy()
 		else:
-			scores = model(x).squeeze(0).detach().cpu().numpy()         # [N]
+			scores = model(x).squeeze(0).detach().cpu().numpy()
 
 	order = np.argsort(scores)[::-1]
 	ranked_stock_ids = [sequence_stock_ids[i] for i in order]
+	ranked_scores = scores[order]
 
-	# 仅输出前5，权重固定 0.2
-	if len(ranked_stock_ids) < 5:
-		raise ValueError(f'可预测股票不足5只，当前仅有 {len(ranked_stock_ids)} 只')
-	top5 = ranked_stock_ids[:5]
+	if len(ranked_stock_ids) < 1:
+		raise ValueError('没有可预测股票')
 
-	top5_scores = scores[order][:5]
-	final_weights = allocate_weights(top5, top5_scores)
-	# exp_scores = np.exp(top5_scores)
-	# softmax_weights = exp_scores / exp_scores.sum()
-	# final_weights = np.round(softmax_weights, 3).tolist()
-	# final_weights[-1] = round(0.99995 - sum(final_weights[:-1]), 4)  # 确保总和为1
-	#final_weights[-1] = round(1 - sum(final_weights[:-1]), 4)  # 确保总和为1
+	os.makedirs(output_dir, exist_ok=True)
+
+	# 保存完整排序。之后只搜索权重时，不需要重新运行模型。
+	ranked_df = pd.DataFrame({
+		'rank': np.arange(1, len(ranked_stock_ids) + 1),
+		'stock_id': ranked_stock_ids,
+		'score': ranked_scores,
+	})
+	ranked_df.to_csv(ranked_scores_path, index=False)
+
+	selected_ids, final_weights = select_and_allocate_weights(ranked_stock_ids, ranked_scores)
 
 	output_df = pd.DataFrame({
-		'stock_id': top5,
-		# 'weight': [0.2] * len(top5),
+		'stock_id': selected_ids,
 		'weight': final_weights,
 	})
 	output_df.to_csv(output_path, index=False)
 
 	print(f'预测日期: {latest_date.date()}')
 	print(f'参与排序股票数: {len(ranked_stock_ids)}')
-	print(f'结果已写入: {output_path}')
+	print(f'完整排序已写入: {ranked_scores_path}')
+	print(f'最终结果已写入: {output_path}')
+	print(f'权重模式: {config.get("predict_weight_mode", "equal")}')
+	print(output_df.to_string(index=False))
 
 
 if __name__ == '__main__':
