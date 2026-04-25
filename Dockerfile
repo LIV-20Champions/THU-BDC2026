@@ -2,6 +2,7 @@ FROM python:3.12-slim-bookworm
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
+    bash \
     gcc \
     g++ \
     make \
@@ -30,14 +31,17 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 # Install dependencies
-RUN uv sync --frozen
+RUN uv sync --frozen --no-install-project
 
 # Copy the application code
 COPY . .
+
+# Ensure scripts are executable
+RUN chmod +x train.sh test.sh
 
 # Set environment to use the virtual environment
 ENV PATH="/app/.venv/bin:$PATH"
 ENV LD_LIBRARY_PATH="/usr/lib:/usr/local/lib"
 
-# Keep container running idle; execute train/predict manually via docker exec.
-CMD ["sleep", "infinity"]
+# Run training and prediction by default
+CMD ["bash", "-lc", "./train.sh && ./test.sh"]

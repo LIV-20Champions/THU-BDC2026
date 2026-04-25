@@ -50,6 +50,16 @@ feature_engineer_func_map = {
 }
 
 
+def get_scale_features(features):
+	"""
+	instrument 是股票离散ID，若启用 stock embedding，就不能参与 StandardScaler。
+	这里必须与 train.py 保持一致，否则训练和预测的特征分布会不一致。
+	"""
+	if config.get('use_stock_embedding', True):
+		return [f for f in features if f != 'instrument']
+	return list(features)
+
+
 def preprocess_predict_data(df, stockid2idx):
 	assert config['feature_num'] in feature_engineer_func_map, f"Unsupported feature_num: {config['feature_num']}"
 	feature_engineer = feature_engineer_func_map[config['feature_num']]
@@ -140,10 +150,11 @@ def main():
 	stockid2idx = {sid: idx for idx, sid in enumerate(stock_ids)}
 
 	processed, features = preprocess_predict_data(raw_df, stockid2idx)
-	processed[features] = processed[features].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+	scale_features = get_scale_features(features)
+	processed[scale_features] = processed[scale_features].replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
 	scaler = joblib.load(scaler_path)
-	processed[features] = scaler.transform(processed[features])
+	processed[scale_features] = scaler.transform(processed[scale_features])
 
 	sequence_length = config['sequence_length']
 	sequences_np, sequence_stock_ids = build_inference_sequences(
@@ -168,7 +179,18 @@ def main():
 
 	with torch.no_grad():
 		x = torch.from_numpy(sequences_np).unsqueeze(0).to(device)  # [1, N, L, F]
-		scores = model(x).squeeze(0).detach().cpu().numpy()         # [N]
+
+		if config.get('use_stock_embedding', True):
+			sequence_stock_indices = [stockid2idx[sid] for sid in sequence_stock_ids]
+			stock_indices = torch.LongTensor(sequence_stock_indices).unsqueeze(0).to(device)
+			stock_mask = torch.ones_like(stock_indices, dtype=torch.bool, device=device)
+			scores = model(
+				x,
+				stock_indices=stock_indices,
+				stock_mask=stock_mask,
+			).squeeze(0).detach().cpu().numpy()
+		else:
+			scores = model(x).squeeze(0).detach().cpu().numpy()         # [N]
 
 	order = np.argsort(scores)[::-1]
 	ranked_stock_ids = [sequence_stock_ids[i] for i in order]
