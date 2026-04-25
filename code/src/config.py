@@ -17,7 +17,7 @@ config = {
     'use_stock_embedding': True,
     'stock_emb_dim': 16,
     'use_lazy_dataset': True,
-    'val_months': 1,
+    'val_months': 2,
     'max_grad_norm': 5.0,
 
     'pairwise_weight': 1, # 配对损失权重

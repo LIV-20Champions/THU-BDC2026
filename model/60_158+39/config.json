@@ -12,7 +12,7 @@
     "use_stock_embedding": true,
     "stock_emb_dim": 16,
     "use_lazy_dataset": true,
-    "val_months": 1,
+    "val_months": 2,
     "max_grad_norm": 5.0,
     "pairwise_weight": 1,
     "base_weight": 1.0,
