@@ -38,20 +38,26 @@ feature_engineer_func_map = {
 
 
 def _build_label_and_clean(processed, drop_small_open=True):
-    """统一构建标签并清洗无效样本。"""
+    """优化版：构建 Alpha 收益标签并清洗。"""
     processed['open_t1'] = processed.groupby('股票代码')['开盘'].shift(-1)
     processed['open_t5'] = processed.groupby('股票代码')['开盘'].shift(-5)
 
-    # 过滤无效开盘价，避免收益率极端爆炸
     if drop_small_open:
         processed = processed[processed['open_t1'] > 1e-4]
 
-    processed['label'] = (processed['open_t5'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
+    # 1. 计算原始的绝对收益率
+    processed['raw_label'] = (processed['open_t5'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
+    
+    # --- 新思路：计算每日所有股票的收益均值（作为市场 Beta） ---
+    daily_mean_return = processed.groupby('日期')['raw_label'].transform('mean')
+    
+    # 2. 计算超额收益 (Alpha) 作为最终标签
+    processed['label'] = processed['raw_label'] - daily_mean_return
+    
     processed = processed.dropna(subset=['label'])
-
-    processed.drop(columns=['open_t1', 'open_t5'], inplace=True)
+    
+    processed.drop(columns=['open_t1', 'open_t5', 'raw_label'], inplace=True)
     return processed
-
 
 def _preprocess_common(df, stockid2idx, desc, drop_small_open=True):
     assert config['feature_num'] in feature_engineer_func_map, f"Unsupported feature_num: {config['feature_num']}"
@@ -353,7 +359,7 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
         if batch_loss is not None:
             batch_loss = batch_loss / batch_size
             batch_loss.backward()
-            if not config.get('drop_clip', True):
+            if not config.get('clip_grad', True):
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config['max_grad_norm'])
                 if writer:
                     writer.add_scalar('train/grad_norm', grad_norm, global_step=epoch*len(dataloader)+local_step)

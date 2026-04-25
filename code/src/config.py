@@ -8,7 +8,7 @@ config = {
     'num_layers': 3,        # Transformer层数
     'dim_feedforward': 512, # 前馈网络维度
     'batch_size': 4,        # 排序任务batch_size可以小一些，因为每个batch包含更多股票
-    'num_epochs': 80,       # 排序任务可能需要更多epochs
+    'num_epochs': 30,       # 排序任务可能需要更多epochs
     'learning_rate': 5e-5,  # 稍微降低学习率
     'dropout': 0.2,
     'feature_num': feature_num,
@@ -16,7 +16,7 @@ config = {
 
     'pairwise_weight': 1, # 配对损失权重
     'base_weight': 1.0, # 非top-k样本权重
-    'top5_weight': 5.0, # top-5样本权重（应大于base_weight）
+    'top5_weight': 2.0, # top-5样本权重（应大于base_weight）
 
     'output_dir': f'./model/{sequence_length}_{feature_num}',
     'data_path': './data',
