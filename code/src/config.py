@@ -27,14 +27,14 @@ config = {
 
     'predict_weight_mode': 'rank_decay',
     'predict_top_k': 5,
-    'predict_rank_weights': [0.30, 0.25, 0.20, 0.15, 0.10],
-    'predict_rank_alpha': 0.8,
+    'predict_rank_weights': [0.40, 0.25, 0.18, 0.11, 0.06],
+    'predict_rank_alpha': 0.2,
     'predict_top3_weights': [0.45, 0.35, 0.20],
     'predict_weight_temperature': 0.5,
 
     'label_alpha': 0.1,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase1_alpha07_s42',
+    'output_dir': './model/phase2_loss64_s42',
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
