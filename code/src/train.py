@@ -618,12 +618,25 @@ def main():
     full_df = pd.read_csv(train_file, dtype={'股票代码': str})
     full_df['股票代码'] = full_df['股票代码'].astype(str).str.zfill(6)
 
-    train_df, val_df, val_start = split_train_val_by_last_n_months(
-        full_df, config['sequence_length'], val_months
-    )
+    # 支持自定义切分日期（用于 CV）
+    train_end_date_override = config.get('_train_end_date')
+    val_start_date_override = config.get('_val_start_date')
+    sequence_length = config['sequence_length']
+    if train_end_date_override and val_start_date_override:
+        train_df = full_df[full_df['日期'] <= train_end_date_override].copy()
+        val_start = pd.to_datetime(val_start_date_override)
+        val_context_start = val_start - pd.tseries.offsets.BDay(sequence_length - 1)
+        val_df = full_df[
+            (full_df['日期'] >= val_context_start.strftime('%Y-%m-%d'))
+        ].copy()
+        print(f"自定义切分: train <= {train_end_date_override}, val >= {val_context_start.date()}")
+    else:
+        train_df, val_df, val_start = split_train_val_by_last_n_months(
+            full_df, sequence_length, val_months
+        )
+        print(f"验证区间(月): {val_months}")
 
     print(f"训练数据文件: {train_file}")
-    print(f"验证区间(月): {val_months}")
     print(f"训练集原始行数: {len(train_df)}")
     print(f"验证集原始行数: {len(val_df)}")
 
@@ -779,8 +792,22 @@ def main():
         min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
     )
 
+    # 支持 num_epochs_override（用于 CV：固定 epoch 数，禁用 early stopping）
+    num_epochs_override = config.get('_num_epochs_override')
+    if num_epochs_override is not None:
+        config['num_epochs'] = num_epochs_override
+        # 重建 scheduler 以适配新的 epoch 数
+        scheduler = _create_warmup_cosine_scheduler(
+            optimizer,
+            warmup_epochs=warmup_epochs,
+            total_epochs=num_epochs_override,
+            min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
+        )
+
     accumulation_steps = int(config.get('gradient_accumulation_steps', 1))
     early_stopping_patience = int(config.get('early_stopping_patience', 15))
+    if num_epochs_override is not None:
+        early_stopping_patience = num_epochs_override  # 禁用 early stopping
 
     selection_metric_name = _resolve_model_selection_metric()
     print(f"模型选择指标: {selection_metric_name}")
@@ -899,10 +926,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--output_dir', type=str, default=None)
+    parser.add_argument('--train_end_date', type=str, default=None)
+    parser.add_argument('--val_start_date', type=str, default=None)
+    parser.add_argument('--num_epochs_override', type=int, default=None)
     args = parser.parse_args()
     if args.seed is not None:
         config['seed'] = args.seed
     if args.output_dir is not None:
         config['output_dir'] = args.output_dir
+    if args.train_end_date is not None:
+        config['_train_end_date'] = args.train_end_date
+    if args.val_start_date is not None:
+        config['_val_start_date'] = args.val_start_date
+    if args.num_epochs_override is not None:
+        config['_num_epochs_override'] = args.num_epochs_override
     best_score = main()
     print(f"\n########## 训练完成！最佳 official_score_eq: {best_score:.6f} ##########")
