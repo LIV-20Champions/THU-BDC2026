@@ -4,15 +4,15 @@ sequence_length = 60
 feature_num = '39'
 config = {
     'sequence_length': sequence_length,
-    'd_model': 96,
+    'd_model': 128,
     'nhead': 4,
-    'num_layers': 1,
-    'dim_feedforward': 192,
+    'num_layers': 2,
+    'dim_feedforward': 256,
     'batch_size': 2,
     'max_stocks_per_sample': 100,
     'num_epochs': 60,
     'learning_rate': 5e-5,
-    'dropout': 0.5,
+    'dropout': 0.35,
     'feature_num': feature_num,
 
     'use_stock_embedding': True,
@@ -33,8 +33,8 @@ config = {
     'predict_weight_temperature': 0.5,
 
     'label_alpha': 0.3,
-    'selected_top_k_features': 80,
-    'output_dir': './model/opt_v11_optimized',
+    'selected_top_k_features': 30,
+    'output_dir': './model/phase1_alpha07_s42',
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
@@ -43,7 +43,7 @@ config = {
     'cosine_min_lr_ratio': 0.01,
     'early_stopping_patience': 15,
     'gradient_accumulation_steps': 4,
-    'weight_decay': 1e-3,
+    'weight_decay': 5e-4,
 
     'use_gru_dual_path': False,
     'gru_hidden_dim': 128,
