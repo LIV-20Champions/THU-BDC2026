@@ -631,6 +631,21 @@ def main():
     train_data, features = preprocess_data(train_df, is_train=True, stockid2idx=stockid2idx)
     val_data, _ = preprocess_data(val_df, is_train=False, stockid2idx=stockid2idx)
 
+    # Feature selection via mutual information (if configured)
+    selected_top_k = int(config.get('selected_top_k_features', 0))
+    selected_features_list = None
+    if selected_top_k > 0 and selected_top_k < len(features):
+        from feature_selection import select_features_by_mi, print_feature_ranking, save_feature_ranking
+        selected_features_list, ranking = select_features_by_mi(
+            train_data, [f for f in features if f != 'instrument'],
+            label_col='label', top_k=selected_top_k
+        )
+        print_feature_ranking(ranking)
+        save_feature_ranking(ranking, os.path.join(output_dir, 'feature_ranking.csv'))
+        train_data = train_data[['instrument', 'label'] + selected_features_list]
+        val_data = val_data[['instrument', 'label'] + selected_features_list]
+        features = ['instrument'] + selected_features_list
+
     scale_features = get_scale_features(features)
     use_per_stock_norm = config.get('use_per_stock_normalize', True)
     use_cs_features = config.get('use_cross_sectional_features', False)
@@ -655,6 +670,7 @@ def main():
         use_per_stock_norm=use_per_stock_norm,
         use_cs_features=use_cs_features,
         cs_feature_types=cs_feature_types,
+        selected_features=selected_features_list,
     )
     train_dataset._max_stocks = config.get('max_stocks_per_sample', 0)
     val_dataset = LazyRankingDataset(
@@ -663,6 +679,7 @@ def main():
         use_per_stock_norm=use_per_stock_norm,
         use_cs_features=use_cs_features,
         cs_feature_types=cs_feature_types,
+        selected_features=selected_features_list,
     )
     print(f"训练集样本数: {len(train_dataset)}")
     print(f"验证集样本数: {len(val_dataset)}")
