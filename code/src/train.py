@@ -645,8 +645,10 @@ def main():
         )
         print_feature_ranking(ranking)
         save_feature_ranking(ranking, os.path.join(output_dir, 'feature_ranking.csv'))
-        train_data = train_data[['instrument', 'label'] + selected_features_list]
-        val_data = val_data[['instrument', 'label'] + selected_features_list]
+        # Keep essential columns: instrument, label, 日期, and selected features
+        keep_cols = ['instrument', 'label', '日期'] + selected_features_list
+        train_data = train_data[[c for c in keep_cols if c in train_data.columns]]
+        val_data = val_data[[c for c in keep_cols if c in val_data.columns]]
         features = ['instrument'] + selected_features_list
 
     scale_features = get_scale_features(features)
