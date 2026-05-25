@@ -32,9 +32,9 @@ config = {
     'predict_top3_weights': [0.45, 0.35, 0.20],
     'predict_weight_temperature': 0.5,
 
-    'label_alpha': 0.1,
+    'label_alpha': 0.3,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase3_final_s42',
+    'output_dir': './model/phase8_ensemble',
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
@@ -99,6 +99,7 @@ config = {
     'mixup_prob': 0.3,
     'use_label_smoothing': True,
     'label_smoothing_alpha': 0.03,
+    'ensemble_size': 5,
 
     'use_amp': True,
     'use_gradient_checkpointing': True,

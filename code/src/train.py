@@ -622,7 +622,13 @@ def main():
     train_end_date_override = config.get('_train_end_date')
     val_start_date_override = config.get('_val_start_date')
     sequence_length = config['sequence_length']
-    if train_end_date_override and val_start_date_override:
+    no_val = int(config.get('val_months', 2)) == 0
+    if no_val:
+        print("val_months=0: 全量数据训练，不拆分验证集")
+        train_df = full_df.copy()
+        val_df = pd.DataFrame()  # empty
+        val_start = pd.to_datetime(full_df['日期'].max())  # dummy, not used
+    elif train_end_date_override and val_start_date_override:
         train_df = full_df[full_df['日期'] <= train_end_date_override].copy()
         val_start = pd.to_datetime(val_start_date_override)
         val_context_start = val_start - pd.tseries.offsets.BDay(sequence_length - 1)
@@ -638,14 +644,17 @@ def main():
 
     print(f"训练数据文件: {train_file}")
     print(f"训练集原始行数: {len(train_df)}")
-    print(f"验证集原始行数: {len(val_df)}")
+    print(f"验证集原始行数: {len(val_df) if not no_val else 0}")
 
     all_stock_ids = full_df['股票代码'].unique()
     stockid2idx = {sid: idx for idx, sid in enumerate(sorted(all_stock_ids))}
     num_stocks = len(stockid2idx)
 
     train_data, features = preprocess_data(train_df, is_train=True, stockid2idx=stockid2idx)
-    val_data, _ = preprocess_data(val_df, is_train=False, stockid2idx=stockid2idx)
+    if not no_val:
+        val_data, _ = preprocess_data(val_df, is_train=False, stockid2idx=stockid2idx)
+    else:
+        val_data = pd.DataFrame()
 
     # Feature selection via mutual information (if configured)
     selected_top_k = int(config.get('selected_top_k_features', 0))
@@ -671,16 +680,18 @@ def main():
     if use_per_stock_norm:
         print("使用逐股票时序Z-Score标准化（训练），跳过全局StandardScaler")
         train_data[scale_features] = train_data[scale_features].replace([np.inf, -np.inf], np.nan).fillna(0.0)
-        val_data[scale_features] = val_data[scale_features].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        if not no_val:
+            val_data[scale_features] = val_data[scale_features].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     else:
         scaler = StandardScaler()
         train_data[scale_features] = scaler.fit_transform(train_data[scale_features])
-        val_data[scale_features] = scaler.transform(val_data[scale_features])
+        if not no_val:
+            val_data[scale_features] = scaler.transform(val_data[scale_features])
         joblib.dump(scaler, os.path.join(output_dir, 'scaler.pkl'))
 
     if train_data.empty:
         raise ValueError("训练特征处理后为空，请检查数据范围、特征工程或 sequence_length。")
-    if val_data.empty:
+    if not no_val and val_data.empty:
         raise ValueError("验证特征处理后为空，请检查数据范围、特征工程或 sequence_length。")
 
     train_dataset = LazyRankingDataset(
@@ -691,22 +702,25 @@ def main():
         selected_features=selected_features_list,
     )
     train_dataset._max_stocks = config.get('max_stocks_per_sample', 0)
-    val_dataset = LazyRankingDataset(
-        val_data, features, config['sequence_length'],
-        min_window_end_date=val_start.strftime('%Y-%m-%d'),
-        use_per_stock_norm=use_per_stock_norm,
-        use_cs_features=use_cs_features,
-        cs_feature_types=cs_feature_types,
-        selected_features=selected_features_list,
-    )
+    if not no_val:
+        val_dataset = LazyRankingDataset(
+            val_data, features, config['sequence_length'],
+            min_window_end_date=val_start.strftime('%Y-%m-%d'),
+            use_per_stock_norm=use_per_stock_norm,
+            use_cs_features=use_cs_features,
+            cs_feature_types=cs_feature_types,
+            selected_features=selected_features_list,
+        )
     print(f"训练集样本数: {len(train_dataset)}")
-    print(f"验证集样本数: {len(val_dataset)}")
-    del train_data, val_data
+    print(f"验证集样本数: {len(val_dataset) if not no_val else 0}")
+    del train_data
+    if not no_val:
+        del val_data
     gc.collect()
 
     if len(train_dataset) == 0:
         raise ValueError("训练排序样本数为 0，请检查数据范围、sequence_length 或样本构造逻辑。")
-    if len(val_dataset) == 0:
+    if not no_val and len(val_dataset) == 0:
         raise ValueError("验证排序样本数为 0，请检查 val_months、sequence_length 或样本构造逻辑。")
 
     train_loader = DataLoader(
@@ -716,13 +730,16 @@ def main():
         pin_memory=bool(config.get('pin_memory', False)),
         persistent_workers=int(config.get('num_workers', 0)) > 0,
     )
-    val_loader = DataLoader(
-        val_dataset, batch_size=config['batch_size'], shuffle=False,
-        collate_fn=collate_fn,
-        num_workers=int(config.get('num_workers', 0)),
-        pin_memory=bool(config.get('pin_memory', False)),
-        persistent_workers=int(config.get('num_workers', 0)) > 0,
-    )
+    if not no_val:
+        val_loader = DataLoader(
+            val_dataset, batch_size=config['batch_size'], shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=int(config.get('num_workers', 0)),
+            pin_memory=bool(config.get('pin_memory', False)),
+            persistent_workers=int(config.get('num_workers', 0)) > 0,
+        )
+    else:
+        val_loader = None
 
     eff_input_dim = get_eff_input_dim(len(features))
     model = StockTransformer(input_dim=eff_input_dim, config=config, num_stocks=num_stocks)
@@ -848,38 +865,48 @@ def main():
             for k, v in train_metrics.items():
                 print(f"Train {k}: {v:.4f}")
 
-            if ema_wrapper is not None and epoch >= 5:
-                ema_wrapper.apply_shadow()
-
-            eval_loss, eval_metrics = evaluate_ranking_model(
-                model, val_loader, criterion, device, writer, epoch,
-                use_amp=use_amp,
-            )
-
-            if ema_wrapper is not None and epoch >= 5:
-                ema_wrapper.restore()
-
-            print(f"Eval Loss: {eval_loss:.4f}")
-            for k, v in eval_metrics.items():
-                print(f"Eval {k}: {v:.4f}")
-
-            writer.add_scalar('train/learning_rate', scheduler.get_last_lr()[0], global_step=epoch)
-            scheduler.step()
-
-            current_selection_score = float(eval_metrics.get(selection_metric_name, 0.0))
-            if current_selection_score > best_score:
-                best_score = current_selection_score
-                best_epoch = epoch + 1
-                epochs_without_improvement = 0
+            if no_val:
+                # 无验证集模式：每 epoch 保存模型
                 torch.save(model.state_dict(), os.path.join(output_dir, 'best_model.pth'))
                 if ema_wrapper is not None:
                     torch.save(ema_wrapper.shadow,
                                os.path.join(output_dir, 'best_model_ema.pth'))
-                print(f"保存最佳模型 - {selection_metric_name}: {best_score:.6f}")
+                best_epoch = epoch + 1
+                best_score = train_loss  # track train loss
+                print(f"保存模型 (epoch {best_epoch}) — 无验证集模式")
             else:
-                epochs_without_improvement += 1
-                print(f"未改善 ({epochs_without_improvement}/{early_stopping_patience}), "
-                      f"当前最佳: {best_score:.6f}")
+                if ema_wrapper is not None and epoch >= 5:
+                    ema_wrapper.apply_shadow()
+
+                eval_loss, eval_metrics = evaluate_ranking_model(
+                    model, val_loader, criterion, device, writer, epoch,
+                    use_amp=use_amp,
+                )
+
+                if ema_wrapper is not None and epoch >= 5:
+                    ema_wrapper.restore()
+
+                print(f"Eval Loss: {eval_loss:.4f}")
+                for k, v in eval_metrics.items():
+                    print(f"Eval {k}: {v:.4f}")
+
+                current_selection_score = float(eval_metrics.get(selection_metric_name, 0.0))
+                if current_selection_score > best_score:
+                    best_score = current_selection_score
+                    best_epoch = epoch + 1
+                    epochs_without_improvement = 0
+                    torch.save(model.state_dict(), os.path.join(output_dir, 'best_model.pth'))
+                    if ema_wrapper is not None:
+                        torch.save(ema_wrapper.shadow,
+                                   os.path.join(output_dir, 'best_model_ema.pth'))
+                    print(f"保存最佳模型 - {selection_metric_name}: {best_score:.6f}")
+                else:
+                    epochs_without_improvement += 1
+                    print(f"未改善 ({epochs_without_improvement}/{early_stopping_patience}), "
+                          f"当前最佳: {best_score:.6f}")
+
+            writer.add_scalar('train/learning_rate', scheduler.get_last_lr()[0], global_step=epoch)
+            scheduler.step()
 
             should_swa = use_swa and (epoch >= swa_start_epoch or epochs_without_improvement >= early_stopping_patience - swa_lookahead)
             if should_swa:
@@ -892,7 +919,7 @@ def main():
                         {k: v.cpu().clone() for k, v in model.state_dict().items()}
                     )
 
-            if epochs_without_improvement >= early_stopping_patience:
+            if not no_val and epochs_without_improvement >= early_stopping_patience:
                 print(f"\n早停触发！连续 {early_stopping_patience} 个 epoch 未改善。")
                 break
 
@@ -940,5 +967,32 @@ if __name__ == "__main__":
         config['_val_start_date'] = args.val_start_date
     if args.num_epochs_override is not None:
         config['_num_epochs_override'] = args.num_epochs_override
-    best_score = main()
-    print(f"\n########## 训练完成！最佳 official_score_eq: {best_score:.6f} ##########")
+
+    ensemble_size = int(config.get('ensemble_size', 1))
+    base_output_dir = config['output_dir']
+
+    if ensemble_size > 1:
+        print(f"\n=== 集成训练模式：{ensemble_size} 个模型 ===")
+        base_seed = config.get('seed', 42)
+        for i in range(ensemble_size):
+            seed_i = base_seed + i * 7  # different seeds
+            config['seed'] = seed_i
+            config['output_dir'] = f'{base_output_dir}/model_{i}'
+            config['_num_epochs_override'] = config.get('_num_epochs_override', 2)  # default 2 epochs for ensemble
+            print(f"\n--- 训练模型 {i+1}/{ensemble_size} (seed={seed_i}) ---")
+            score = main()
+            # Reset mutable state for next iteration
+            config['_train_end_date'] = None
+            config['_val_start_date'] = None
+        # Save ensemble metadata
+        import json
+        meta = {'ensemble_size': ensemble_size, 'base_seed': base_seed,
+                'seeds': [base_seed + i * 7 for i in range(ensemble_size)]}
+        os.makedirs(base_output_dir, exist_ok=True)
+        with open(os.path.join(base_output_dir, 'ensemble_config.json'), 'w') as f:
+            json.dump(meta, f, indent=2)
+        print(f"\n########## 集成训练完成！{ensemble_size} 个模型已保存 ##########")
+        best_score = 0.0
+    else:
+        best_score = main()
+        print(f"\n########## 训练完成！最佳 official_score_eq: {best_score:.6f} ##########")
