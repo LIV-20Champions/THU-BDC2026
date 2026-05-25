@@ -43,23 +43,26 @@ def get_feature_engineering_workers(num_groups):
 
 
 def _build_label_and_clean(processed, drop_small_open=True, label_alpha=0.3):
-    """Build label from future open returns, using close as base price.
+    """Build label from future open-to-open returns, using open_t1 as base price.
 
-    label = alpha * ret(close -> open_t3) + (1-alpha) * ret(close -> open_t5)
+    label = alpha * ret(open_t1 -> open_t3) + (1-alpha) * ret(open_t1 -> open_t5)
     where ret(A -> B) = (B - A) / A
 
-    Using close (observable at prediction time) instead of open_t1 (unobservable).
-    Default alpha=0.3 matches original weighting (70% weight on t5 horizon).
+    Default alpha=0.3 means 30% weight on t1→t3, 70% on t1→t5 (matching original).
     """
+    processed['open_t1'] = processed.groupby('股票代码')['开盘'].shift(-1)
     processed['open_t3'] = processed.groupby('股票代码')['开盘'].shift(-3)
     processed['open_t5'] = processed.groupby('股票代码')['开盘'].shift(-5)
 
-    ret_close_t3 = (processed['open_t3'] - processed['收盘']) / (processed['收盘'] + 1e-12)
-    ret_close_t5 = (processed['open_t5'] - processed['收盘']) / (processed['收盘'] + 1e-12)
-    processed['label'] = label_alpha * ret_close_t3 + (1.0 - label_alpha) * ret_close_t5
+    if drop_small_open:
+        processed = processed[processed['open_t1'] > 1e-4]
+
+    ret_t1t3 = (processed['open_t3'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
+    ret_t1t5 = (processed['open_t5'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
+    processed['label'] = label_alpha * ret_t1t3 + (1.0 - label_alpha) * ret_t1t5
     processed = processed.dropna(subset=['label'])
 
-    processed.drop(columns=['open_t3', 'open_t5'], inplace=True)
+    processed.drop(columns=['open_t1', 'open_t3', 'open_t5'], inplace=True)
     return processed
 
 
