@@ -34,7 +34,7 @@ config = {
 
     'label_alpha': 0.1,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase2_loss64_s42',
+    'output_dir': './model/phase3_final_s42',
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
