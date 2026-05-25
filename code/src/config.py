@@ -11,7 +11,7 @@ config = {
     'batch_size': 2,
     'max_stocks_per_sample': 100,
     'num_epochs': 60,
-    'learning_rate': 5e-5,
+    'learning_rate': 8e-5,
     'dropout': 0.35,
     'feature_num': feature_num,
 
@@ -39,7 +39,7 @@ config = {
     'data_path': './data',
     'val_months': 2,
 
-    'warmup_epochs': 5,
+    'warmup_epochs': 3,
     'cosine_min_lr_ratio': 0.01,
     'early_stopping_patience': 15,
     'gradient_accumulation_steps': 4,
@@ -51,7 +51,7 @@ config = {
     'cross_stock_layers': 2,
     'layer_scale_init': 1e-5,
     'drop_path_rate': 0.1,
-    'use_feature_interaction': False,
+    'use_feature_interaction': True,
     'interaction_hidden_dim': 64,
 
     'use_per_stock_normalize': True,
@@ -59,7 +59,7 @@ config = {
     'use_cross_sectional_features': False,
     'cs_feature_types': ['rank_pct', 'zscore'],
 
-    'use_vsn': False,
+    'use_vsn': True,
     'vsn_num_groups': 10,
     'vsn_hidden_size': 64,
     'vsn_temperature': 1.0,
