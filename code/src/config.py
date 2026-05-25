@@ -76,8 +76,8 @@ config = {
     'ms_fusion_mode': 'linear',
 
     'use_smooth_ndcg_loss': True,
-    'smooth_ndcg_weight': 0.7,
-    'lambda_pairwise_weight': 0.3,
+    'smooth_ndcg_weight': 0.6,
+    'lambda_pairwise_weight': 0.4,
     'ndcg_top_k': 5,
     'soft_sort_temperature': 0.2,
     'temperature_anneal_start': 2.0,
