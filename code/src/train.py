@@ -17,6 +17,7 @@ import gc
 import multiprocessing as mp
 import random
 import math
+from sam import SAM
 
 
 def set_seed(seed=42):
@@ -472,17 +473,50 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
                 if use_amp:
                     scaler.unscale_(optimizer)
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config['max_grad_norm'])
-                if writer:
-                    writer.add_scalar('train/grad_norm', grad_norm,
-                                      global_step=epoch * len(dataloader) + local_step)
-            if use_amp:
-                scaler.step(optimizer)
-                scaler.update()
+
+            if use_sam:
+                # SAM first step: perturb parameters in gradient direction
+                optimizer.first_step(zero_grad=True)
+
+                # Second forward-backward with perturbed parameters
+                with amp_ctx:
+                    outputs2 = model(sequences, stock_indices=stock_indices, stock_mask=masks.bool())
+                    masked_outputs2 = outputs2 * masks + (1 - masks) * (-1e9)
+                    batch_loss2 = None
+                    for i in range(sequences.size(0)):
+                        valid_indices = masks[i].nonzero(as_tuple=False).flatten()
+                        if valid_indices.numel() <= 1:
+                            continue
+                        valid_pred = masked_outputs2[i][valid_indices]
+                        valid_true = masked_targets[i][valid_indices]
+                        loss2 = criterion(valid_pred.unsqueeze(0), valid_true.unsqueeze(0))
+                        batch_loss2 = batch_loss2 + loss2 if isinstance(batch_loss2, torch.Tensor) else loss2
+                    if batch_loss2 is not None:
+                        batch_loss2 = batch_loss2 / sequences.size(0)
+                    else:
+                        batch_loss2 = torch.tensor(0.0, device=sequences.device, requires_grad=True) / sequences.size(0)
+
+                if use_amp:
+                    scaler.scale(batch_loss2).backward()
+                    scaler.unscale_(optimizer)
+                    if config.get('enable_grad_clip', True):
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), config['max_grad_norm'])
+
+                # SAM second step: restore original params + update with SAM gradient
+                optimizer.second_step(zero_grad=True)
+                if use_amp:
+                    scaler.update()
             else:
-                optimizer.step()
+                # Standard optimizer step (no SAM)
+                if use_amp:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                optimizer.zero_grad()
+
             if ema_wrapper is not None:
                 ema_wrapper.update()
-            optimizer.zero_grad()
 
             total_loss += batch_loss.item() * accumulation_steps
             with torch.no_grad():
@@ -590,6 +624,23 @@ def _create_warmup_cosine_scheduler(optimizer, warmup_epochs, total_epochs, min_
             return float(epoch + 1) / float(max(warmup_epochs, 1))
         progress = float(epoch - warmup_epochs) / float(max(total_epochs - warmup_epochs, 1))
         return min_lr_ratio + 0.5 * (1.0 - min_lr_ratio) * (1.0 + math.cos(math.pi * progress))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
+def _create_warmup_cosine_restart_scheduler(optimizer, warmup_epochs, T_0=10, T_mult=2, min_lr_ratio=0.01):
+    base_lr = optimizer.param_groups[0]['lr']
+
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return float(epoch + 1) / float(max(warmup_epochs, 1))
+        epoch_after_warmup = epoch - warmup_epochs
+        T_cur = T_0
+        while epoch_after_warmup >= T_cur:
+            epoch_after_warmup -= T_cur
+            T_cur = T_cur * T_mult
+        cos_inner = math.cos(math.pi * float(epoch_after_warmup) / float(max(T_cur, 1)))
+        return min_lr_ratio + 0.5 * (1.0 - min_lr_ratio) * (1.0 + cos_inner)
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
@@ -795,33 +846,59 @@ def main():
     else:
         print(f"AMP未启用 (config={config.get('use_amp', False)}, device={device.type})")
 
-    optimizer = torch.optim.AdamW(
+    base_optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=config['learning_rate'],
         weight_decay=float(config.get('weight_decay', 1e-5))
     )
+    use_sam = bool(config.get('use_sam', False))
+    sam_rho = float(config.get('sam_rho', 0.05))
+    if use_sam:
+        optimizer = SAM(model.parameters(), base_optimizer, rho=sam_rho)
+        print(f"SAM优化器已启用 (rho={sam_rho})")
+    else:
+        optimizer = base_optimizer
+        print("使用标准 AdamW 优化器")
 
     warmup_epochs = int(config.get('warmup_epochs', 5))
-    scheduler = _create_warmup_cosine_scheduler(
-        optimizer,
-        warmup_epochs=warmup_epochs,
-        total_epochs=config['num_epochs'],
-        min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
-    )
+    use_cosine_restarts = bool(config.get('use_cosine_restarts', False))
+    cosine_restart_T0 = int(config.get('cosine_restart_T0', 10))
+    cosine_restart_T_mult = int(config.get('cosine_restart_T_mult', 2))
+    if use_cosine_restarts:
+        scheduler = _create_warmup_cosine_restart_scheduler(
+            optimizer, warmup_epochs, T_0=cosine_restart_T0, T_mult=cosine_restart_T_mult,
+            min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
+        )
+        print(f"Cosine热重启: T_0={cosine_restart_T0}, T_mult={cosine_restart_T_mult}")
+    else:
+        scheduler = _create_warmup_cosine_scheduler(
+            optimizer,
+            warmup_epochs=warmup_epochs,
+            total_epochs=config['num_epochs'],
+            min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
+        )
 
     # 支持 num_epochs_override（用于 CV：固定 epoch 数，禁用 early stopping）
     num_epochs_override = config.get('_num_epochs_override')
     if num_epochs_override is not None:
         config['num_epochs'] = num_epochs_override
-        # 重建 scheduler 以适配新的 epoch 数
-        scheduler = _create_warmup_cosine_scheduler(
-            optimizer,
-            warmup_epochs=warmup_epochs,
-            total_epochs=num_epochs_override,
-            min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
-        )
+        if use_cosine_restarts:
+            scheduler = _create_warmup_cosine_restart_scheduler(
+                optimizer, warmup_epochs, T_0=cosine_restart_T0, T_mult=cosine_restart_T_mult,
+                min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
+            )
+        else:
+            scheduler = _create_warmup_cosine_scheduler(
+                optimizer,
+                warmup_epochs=warmup_epochs,
+                total_epochs=num_epochs_override,
+                min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
+            )
 
     accumulation_steps = int(config.get('gradient_accumulation_steps', 1))
+    if use_sam and accumulation_steps > 1:
+        print(f"SAM模式下梯度累积从 {accumulation_steps} 调整为 1（SAM已双重计算）")
+        accumulation_steps = 1
     early_stopping_patience = int(config.get('early_stopping_patience', 15))
     if num_epochs_override is not None:
         early_stopping_patience = num_epochs_override  # 禁用 early stopping
@@ -978,7 +1055,7 @@ if __name__ == "__main__":
             seed_i = base_seed + i * 7  # different seeds
             config['seed'] = seed_i
             config['output_dir'] = f'{base_output_dir}/model_{i}'
-            config['_num_epochs_override'] = config.get('_num_epochs_override', 2)  # default 2 epochs for ensemble
+            config['_num_epochs_override'] = config.get('_num_epochs_override', 30)
             print(f"\n--- 训练模型 {i+1}/{ensemble_size} (seed={seed_i}) ---")
             score = main()
             # Reset mutable state for next iteration
