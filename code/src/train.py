@@ -409,7 +409,8 @@ def _get_batch_stock_indices(batch, device):
 def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, writer,
                         accumulation_steps=1, ema_wrapper=None,
                         use_mixup=False, mixup_alpha=0.2, mixup_prob=0.3,
-                        use_label_smoothing=False, ls_alpha=0.05, scaler=None):
+                        use_label_smoothing=False, ls_alpha=0.05, scaler=None,
+                        use_sam=False):
     model.train()
     total_loss = 0.0
     total_metrics = {}
@@ -498,9 +499,8 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
 
                 if use_amp:
                     scaler.scale(batch_loss2).backward()
-                    scaler.unscale_(optimizer)
-                    if config.get('enable_grad_clip', True):
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), config['max_grad_norm'])
+                else:
+                    batch_loss2.backward()
 
                 # SAM second step: restore original params + update with SAM gradient
                 optimizer.second_step(zero_grad=True)
@@ -936,6 +936,7 @@ def main():
                 use_mixup=use_mixup, mixup_alpha=mixup_alpha, mixup_prob=mixup_prob,
                 use_label_smoothing=use_label_smoothing, ls_alpha=ls_alpha,
                 scaler=scaler,
+                use_sam=use_sam,
             )
 
             print(f"Train Loss: {train_loss:.4f}")
