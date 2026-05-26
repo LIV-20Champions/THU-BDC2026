@@ -34,16 +34,25 @@ config = {
 
     'label_alpha': 0.3,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase8_ensemble',
+    'output_dir': './model/phase9_sam',
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
 
     'warmup_epochs': 5,
     'cosine_min_lr_ratio': 0.01,
-    'early_stopping_patience': 15,
-    'gradient_accumulation_steps': 4,
+    'early_stopping_patience': 20,
+    'gradient_accumulation_steps': 1,
     'weight_decay': 5e-4,
+
+    # --- SAM optimizer ---
+    'use_sam': True,
+    'sam_rho': 0.05,
+
+    # --- Cosine warm restarts ---
+    'use_cosine_restarts': True,
+    'cosine_restart_T0': 10,
+    'cosine_restart_T_mult': 2,
 
     'use_gru_dual_path': False,
     'gru_hidden_dim': 128,
@@ -51,7 +60,7 @@ config = {
     'cross_stock_layers': 2,
     'layer_scale_init': 1e-5,
     'drop_path_rate': 0.1,
-    'use_feature_interaction': False,
+    'use_feature_interaction': True,
     'interaction_hidden_dim': 64,
 
     'use_per_stock_normalize': True,
@@ -59,7 +68,7 @@ config = {
     'use_cross_sectional_features': False,
     'cs_feature_types': ['rank_pct', 'zscore'],
 
-    'use_vsn': False,
+    'use_vsn': True,
     'vsn_num_groups': 10,
     'vsn_hidden_size': 64,
     'vsn_temperature': 1.0,
@@ -84,7 +93,7 @@ config = {
     'temperature_anneal_target': 0.5,
     'temperature_anneal_epochs': 30,
     'lambda_delta_clip': 10.0,
-    'use_mse_aux_loss': False,
+    'use_mse_aux_loss': True,
     'mse_aux_weight': 0.05,
 
     'use_ema': True,
