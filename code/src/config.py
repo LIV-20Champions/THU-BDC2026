@@ -15,7 +15,7 @@ config = {
     'dropout': 0.35,
     'feature_num': feature_num,
 
-    'use_stock_embedding': True,
+    'use_stock_embedding': False,
     'stock_emb_dim': 16,
     'use_lazy_dataset': True,
 
