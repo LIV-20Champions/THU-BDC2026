@@ -1,0 +1,100 @@
+全量数据范围: 2024-01-02 到 2026-03-06
+训练集范围: 2024-01-02 到 2026-01-05
+验证集目标范围(最后2个月): 2026-01-06 到 2026-03-06
+验证集实际取数范围(含序列上下文): 2025-10-15 到 2026-03-06
+训练数据文件: ./data/train.csv
+验证区间(月): 2
+训练集原始行数: 145190
+验证集原始行数: 28500
+正在使用多进程进行特征工程...
+特征工程进程数: 4
+特征工程:   0%|          | 0/300 [00:00<?, ?it/s]特征工程:   0%|          | 1/300 [00:01<08:38,  1.73s/it]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:   3%|▎         | 9/300 [00:01<00:45,  6.38it/s]特征工程:   6%|▌         | 17/300 [00:01<00:21, 13.34it/s]特征工程:   8%|▊         | 25/300 [00:02<00:12, 21.23it/s]特征工程:  11%|█▏        | 34/300 [00:02<00:08, 30.93it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  14%|█▍        | 43/300 [00:02<00:06, 40.73it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  17%|█▋        | 51/300 [00:02<00:05, 48.12it/s]特征工程:  20%|██        | 60/300 [00:02<00:04, 57.04it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  23%|██▎       | 69/300 [00:02<00:04, 57.33it/s]特征工程:  26%|██▌       | 78/300 [00:02<00:03, 64.80it/s]特征工程:  29%|██▉       | 87/300 [00:02<00:03, 70.70it/s]特征工程:  32%|███▏      | 96/300 [00:02<00:02, 75.65it/s]特征工程:  35%|███▌      | 105/300 [00:03<00:02, 71.77it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  38%|███▊      | 113/300 [00:03<00:02, 73.22it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  41%|████      | 122/300 [00:03<00:02, 77.35it/s]特征工程:  44%|████▎     | 131/300 [00:03<00:02, 78.32it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  47%|████▋     | 141/300 [00:03<00:01, 79.68it/s]特征工程:  50%|█████     | 150/300 [00:03<00:01, 81.47it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  53%|█████▎    | 159/300 [00:03<00:01, 81.02it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  56%|█████▋    | 169/300 [00:03<00:01, 82.12it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  60%|█████▉    | 179/300 [00:03<00:01, 82.95it/s]特征工程:  63%|██████▎   | 189/300 [00:04<00:01, 82.22it/s]特征工程:  66%|██████▋   | 199/300 [00:04<00:01, 86.90it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  69%|██████▉   | 208/300 [00:04<00:01, 85.51it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  72%|███████▏  | 217/300 [00:04<00:01, 81.07it/s]特征工程:  75%|███████▌  | 226/300 [00:04<00:00, 82.96it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  79%|███████▊  | 236/300 [00:04<00:00, 86.70it/s]特征工程:  82%|████████▏ | 245/300 [00:04<00:00, 80.69it/s]特征工程:  85%|████████▌ | 256/300 [00:04<00:00, 86.24it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  88%|████████▊ | 265/300 [00:05<00:00, 81.76it/s]特征工程:  92%|█████████▏| 276/300 [00:05<00:00, 87.53it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  95%|█████████▌| 285/300 [00:05<00:00, 71.37it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+特征工程:  99%|█████████▉| 298/300 [00:05<00:00, 78.20it/s]特征工程: 100%|██████████| 300/300 [00:05<00:00, 54.97it/s]
+/home/vega/c4/THU-BDC2026/code/src/train.py:52: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
+
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  processed['label'] = (processed['open_t5'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
+正在使用多进程进行验证集特征工程...
+验证集特征工程进程数: 4
+验证集特征工程:   0%|          | 0/300 [00:00<?, ?it/s]验证集特征工程:   0%|          | 1/300 [00:01<08:36,  1.73s/it]验证集特征工程:   3%|▎         | 9/300 [00:01<00:44,  6.55it/s]验证集特征工程:   7%|▋         | 22/300 [00:01<00:14, 18.54it/s]验证集特征工程:  12%|█▏        | 36/300 [00:02<00:07, 33.25it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+验证集特征工程:  16%|█▌        | 47/300 [00:02<00:05, 44.52it/s]验证集特征工程:  19%|█▉        | 58/300 [00:02<00:04, 55.66it/s]验证集特征工程:  24%|██▎       | 71/300 [00:02<00:03, 70.34it/s]验证集特征工程:  28%|██▊       | 85/300 [00:02<00:02, 81.68it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+验证集特征工程:  32%|███▏      | 97/300 [00:02<00:02, 89.19it/s]验证集特征工程:  36%|███▋      | 109/300 [00:02<00:01, 95.99it/s]验证集特征工程:  40%|████      | 121/300 [00:02<00:01, 101.68it/s]验证集特征工程:  44%|████▍     | 133/300 [00:02<00:01, 104.93it/s]验证集特征工程:  48%|████▊     | 145/300 [00:02<00:01, 107.19it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+验证集特征工程:  52%|█████▏    | 157/300 [00:03<00:01, 107.44it/s]验证集特征工程:  56%|█████▋    | 169/300 [00:03<00:01, 108.49it/s]验证集特征工程:  60%|██████    | 181/300 [00:03<00:01, 111.00it/s]验证集特征工程:  64%|██████▍   | 193/300 [00:03<00:00, 111.26it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+验证集特征工程:  68%|██████▊   | 205/300 [00:03<00:00, 111.52it/s]验证集特征工程:  72%|███████▏  | 217/300 [00:03<00:00, 112.13it/s]验证集特征工程:  76%|███████▋  | 229/300 [00:03<00:00, 112.26it/s]验证集特征工程:  80%|████████  | 241/300 [00:03<00:00, 112.15it/s]验证集特征工程:  84%|████████▍ | 253/300 [00:03<00:00, 111.90it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+验证集特征工程:  88%|████████▊ | 265/300 [00:04<00:00, 110.78it/s]验证集特征工程:  92%|█████████▏| 277/300 [00:04<00:00, 111.03it/s]/home/vega/c4/THU-BDC2026/code/src/utils.py:92: FutureWarning: The default fill_method='pad' in Series.pct_change is deprecated and will be removed in a future version. Either fill in any non-leading NA values prior to calling pct_change or specify 'fill_method=None' to not fill NA values.
+  df['volume_change'] = volume.pct_change()
+验证集特征工程:  96%|█████████▋| 289/300 [00:04<00:00, 111.36it/s]验证集特征工程: 100%|██████████| 300/300 [00:04<00:00, 67.75it/s] 
+/home/vega/c4/THU-BDC2026/code/src/train.py:52: SettingWithCopyWarning: 
+A value is trying to be set on a copy of a slice from a DataFrame.
+Try using .loc[row_indexer,col_indexer] = value instead
+
+See the caveats in the documentation: https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+  processed['label'] = (processed['open_t5'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
+正在构建训练集懒加载索引...
+构建训练集索引:   0%|          | 0/300 [00:00<?, ?it/s]构建训练集索引:  15%|█▌        | 45/300 [00:00<00:00, 445.38it/s]构建训练集索引:  44%|████▍     | 133/300 [00:00<00:00, 695.21it/s]构建训练集索引:  74%|███████▎  | 221/300 [00:00<00:00, 777.25it/s]构建训练集索引: 100%|██████████| 300/300 [00:00<00:00, 762.76it/s]
+整理训练集样本:   0%|          | 0/422 [00:00<?, ?it/s]整理训练集样本: 100%|██████████| 422/422 [00:00<00:00, 18347.63it/s]
+成功构建 422 个懒加载样本
+每个样本平均包含 298.6 只股票
+正在构建验证集懒加载索引...
+构建验证集索引:   0%|          | 0/300 [00:00<?, ?it/s]构建验证集索引:  71%|███████   | 212/300 [00:00<00:00, 2113.04it/s]构建验证集索引: 100%|██████████| 300/300 [00:00<00:00, 2155.70it/s]
+整理验证集样本:   0%|          | 0/31 [00:00<?, ?it/s]整理验证集样本: 100%|██████████| 31/31 [00:00<00:00, 20252.87it/s]
+成功构建 31 个懒加载样本
+每个样本平均包含 300.0 只股票
+训练集样本数: 422
+验证集样本数: 31
+模型参数量: 3102017
+模型选择指标: official_score_eq
+梯度累积步数: 1
+早停耐心值: 15
+
+=== Epoch 1/80 ===
+Training Epoch 1:   0%|          | 0/106 [00:00<?, ?it/s]/usr/lib/python3.12/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 4 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

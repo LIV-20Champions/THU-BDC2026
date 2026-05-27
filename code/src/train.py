@@ -236,6 +236,8 @@ def _build_eval_weights(pred_scores, mode='equal', temperature=0.25):
     pred_scores = np.asarray(pred_scores, dtype=np.float64)
     if pred_scores.ndim != 1 or pred_scores.size == 0:
         raise ValueError('pred_scores 必须是一维且非空')
+    if not np.isfinite(pred_scores).all():
+        pred_scores = np.nan_to_num(pred_scores, nan=0.0, posinf=1.0, neginf=-1.0)
 
     if mode == 'equal':
         weights = np.ones_like(pred_scores, dtype=np.float64)

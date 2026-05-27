@@ -97,7 +97,5 @@
     "use_label_smoothing": true,
     "label_smoothing_alpha": 0.03,
     "use_amp": true,
-    "use_gradient_checkpointing": true,
-    "seed": 42,
-    "_num_epochs_override": 2
+    "use_gradient_checkpointing": true
 }

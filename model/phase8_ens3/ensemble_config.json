@@ -1,0 +1,9 @@
+{
+  "ensemble_size": 3,
+  "base_seed": 42,
+  "seeds": [
+    42,
+    49,
+    56
+  ]
+}

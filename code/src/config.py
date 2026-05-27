@@ -47,7 +47,7 @@ config = {
 
     # --- SAM optimizer ---
     'use_sam': True,
-    'sam_rho': 0.05,
+    'sam_rho': 0.02,
 
     # --- Cosine warm restarts ---
     'use_cosine_restarts': True,
@@ -68,7 +68,7 @@ config = {
     'use_cross_sectional_features': False,
     'cs_feature_types': ['rank_pct', 'zscore'],
 
-    'use_vsn': True,
+    'use_vsn': False,
     'vsn_num_groups': 10,
     'vsn_hidden_size': 64,
     'vsn_temperature': 1.0,
