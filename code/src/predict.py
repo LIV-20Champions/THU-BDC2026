@@ -161,12 +161,10 @@ def select_and_allocate_weights(ranked_stock_ids, ranked_scores):
 def _load_model_weights(model_dir_str):
     model_dir = Path(model_dir_str)
     config_path = model_dir / 'config.json'
+    saved_config = {}
     if config_path.exists():
         with open(config_path, 'r', encoding='utf-8') as f:
             saved_config = json.load(f)
-        for k, v in saved_config.items():
-            if k in config:
-                config[k] = v
 
     model_path = os.path.join(model_dir_str, 'best_model.pth')
     ema_path = os.path.join(model_dir_str, 'best_model_ema.pth')
@@ -183,7 +181,7 @@ def _load_model_weights(model_dir_str):
         print(f"  [{model_dir_str}] EMA模型")
     else:
         print(f"  [{model_dir_str}] 标准模型")
-    return state
+    return state, saved_config
 
 
 def _predict_with_model(model, sequences_np, stockid2idx, sequence_stock_ids, device):
@@ -223,9 +221,9 @@ def main():
     config_path = Path(primary_dir) / 'config.json'
     if config_path.exists():
         with open(config_path, 'r', encoding='utf-8') as f:
-            saved_config = json.load(f)
-        for k, v in saved_config.items():
-            if k in config:
+            primary_saved_config = json.load(f)
+        for k, v in primary_saved_config.items():
+            if k in config and k not in ('ensemble_size',):  # 保留当前集成设置
                 config[k] = v
         print(f"已加载训练配置: {config_path}")
 
@@ -293,8 +291,13 @@ def main():
     if ensemble_dirs:
         all_scores = []
         for md in ensemble_dirs:
-            state = _load_model_weights(md)
-            model = StockTransformer(input_dim=eff_input_dim, config=config, num_stocks=len(stock_ids))
+            state, saved_cfg = _load_model_weights(md)
+            # Merge saved config WITHOUT mutating global config (use local copy)
+            run_config = dict(config)
+            for k, v in saved_cfg.items():
+                if k in run_config:
+                    run_config[k] = v
+            model = StockTransformer(input_dim=eff_input_dim, config=run_config, num_stocks=len(stock_ids))
             model.load_state_dict(state)
             model.to(device)
             scores = _predict_with_model(model, sequences_np, stockid2idx, sequence_stock_ids, device)
@@ -309,8 +312,12 @@ def main():
         scores = np.mean(rank_scores, axis=0)
         print(f"Ensemble: {len(all_scores)}个模型rank归一化取均值")
     else:
-        state = _load_model_weights(config['output_dir'])
-        model = StockTransformer(input_dim=eff_input_dim, config=config, num_stocks=len(stock_ids))
+        state, saved_cfg = _load_model_weights(config['output_dir'])
+        run_config = dict(config)
+        for k, v in saved_cfg.items():
+            if k in run_config:
+                run_config[k] = v
+        model = StockTransformer(input_dim=eff_input_dim, config=run_config, num_stocks=len(stock_ids))
         model.load_state_dict(state)
         model.to(device)
         scores = _predict_with_model(model, sequences_np, stockid2idx, sequence_stock_ids, device)

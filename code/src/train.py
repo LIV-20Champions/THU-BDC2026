@@ -1051,16 +1051,20 @@ if __name__ == "__main__":
     if ensemble_size > 1:
         print(f"\n=== 集成训练模式：{ensemble_size} 个模型 ===")
         base_seed = config.get('seed', 42)
+        # Preserve original config keys that main() mutates
+        _orig_config_snapshot = {
+            'seed': config.get('seed'),
+            'output_dir': config['output_dir'],
+        }
         for i in range(ensemble_size):
             seed_i = base_seed + i * 7  # different seeds
             config['seed'] = seed_i
             config['output_dir'] = f'{base_output_dir}/model_{i}'
             config['_num_epochs_override'] = config.get('_num_epochs_override', 30)
-            print(f"\n--- 训练模型 {i+1}/{ensemble_size} (seed={seed_i}) ---")
-            score = main()
-            # Reset mutable state for next iteration
             config['_train_end_date'] = None
             config['_val_start_date'] = None
+            print(f"\n--- 训练模型 {i+1}/{ensemble_size} (seed={seed_i}) ---")
+            score = main()
         # Save ensemble metadata
         import json
         meta = {'ensemble_size': ensemble_size, 'base_seed': base_seed,

@@ -147,6 +147,9 @@ feature_columns_map = {
     ]
 }
 
+# NOTE: function names are misleading — engineer_features_158 generates ~39 features
+# (basic TA-Lib set), engineer_features_39 generates ~158 features (Alpha factors).
+# The map keys are authoritative: '39' = basic set, '158+39' = combined.
 feature_engineer_func_map = {
     '39': engineer_features_158,
     '158': engineer_features_39,
@@ -155,7 +158,7 @@ feature_engineer_func_map = {
 
 
 def get_scale_features(features):
-    if config.get('use_stock_embedding', False):
+    if config.get('use_stock_embedding', True):
         return [f for f in features if f != 'instrument']
     return list(features)
 
