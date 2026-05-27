@@ -898,9 +898,6 @@ def main():
             )
 
     accumulation_steps = int(config.get('gradient_accumulation_steps', 1))
-    if use_sam and accumulation_steps > 1:
-        print(f"SAM模式下梯度累积从 {accumulation_steps} 调整为 1（SAM已双重计算）")
-        accumulation_steps = 1
     early_stopping_patience = int(config.get('early_stopping_patience', 15))
     if num_epochs_override is not None:
         early_stopping_patience = num_epochs_override  # 禁用 early stopping

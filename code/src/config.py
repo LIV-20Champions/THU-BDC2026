@@ -34,7 +34,7 @@ config = {
 
     'label_alpha': 0.3,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase9_sam',
+    'output_dir': './model/phase9_final',
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
