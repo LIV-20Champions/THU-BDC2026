@@ -262,6 +262,9 @@ class SoftTopKReturnLoss(nn.Module):
                 continue
             pred = y_pred[i, valid].unsqueeze(0)
             target = score_target[i, valid].unsqueeze(0)
+            # Clamp extreme values for numerical stability
+            pred = torch.clamp(pred, -20.0, 20.0)
+            target = torch.nan_to_num(target, nan=0.0, posinf=1.0, neginf=-1.0)
             diff = pred.unsqueeze(2) - pred.unsqueeze(1)
             soft_rank = 1.0 + torch.sigmoid(diff / max(self.rank_temperature, 0.01)).sum(dim=2) - 0.5
             gate = torch.sigmoid((self.top_k + self.gate_margin - soft_rank) / max(self.gate_temperature, 0.01))
@@ -609,12 +612,28 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
             masked_targets = targets * masks
             masked_score_targets = score_targets * masks
 
-            batch_loss = _compute_grouped_batch_loss(masked_outputs, masked_score_targets, masks)
+            # Use score_target (pure 5-day return) with criterion, + MaskedSoftRankIC
+            batch_loss = None
+            for i in range(sequences.size(0)):
+                valid_indices = masks[i].nonzero(as_tuple=False).flatten()
+                if valid_indices.numel() <= 1:
+                    continue
+                valid_pred = masked_outputs[i][valid_indices]
+                valid_score = masked_score_targets[i][valid_indices]
+                loss = criterion(valid_pred.unsqueeze(0), valid_score.unsqueeze(0))
+                batch_loss = batch_loss + loss if isinstance(batch_loss, torch.Tensor) else loss
+
+            if use_soft_rankic and batch_loss is not None:
+                full_pred = outputs.reshape(masked_outputs.size(0), -1)
+                full_score = masked_score_targets
+                full_mask = masks.bool()
+                rankic_loss = rankic_loss_fn(full_pred, full_score, full_mask)
+                batch_loss = batch_loss + rankic_weight * rankic_loss
 
             if batch_loss is not None:
-                batch_loss = batch_loss / accumulation_steps
+                batch_loss = batch_loss / (sequences.size(0) * accumulation_steps)
             else:
-                batch_loss = torch.tensor(0.0, device=sequences.device, requires_grad=True)
+                batch_loss = torch.tensor(0.0, device=sequences.device, requires_grad=True) / (sequences.size(0) * accumulation_steps)
 
         if use_amp:
             scaler.scale(batch_loss).backward()
@@ -636,7 +655,23 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
                     outputs2 = model(sequences, stock_indices=stock_indices, stock_mask=masks.bool())
                     masked_outputs2 = outputs2 * masks + (1 - masks) * (-1e9)
 
-                    batch_loss2 = _compute_grouped_batch_loss(masked_outputs2, masked_score_targets, masks)
+                    batch_loss2 = None
+                    for i in range(sequences.size(0)):
+                        valid_indices = masks[i].nonzero(as_tuple=False).flatten()
+                        if valid_indices.numel() <= 1:
+                            continue
+                        valid_pred = masked_outputs2[i][valid_indices]
+                        valid_score = masked_score_targets[i][valid_indices]
+                        loss2 = criterion(valid_pred.unsqueeze(0), valid_score.unsqueeze(0))
+                        batch_loss2 = batch_loss2 + loss2 if isinstance(batch_loss2, torch.Tensor) else loss2
+
+                    if use_soft_rankic and batch_loss2 is not None:
+                        full_pred2 = outputs2.reshape(masked_outputs2.size(0), -1)
+                        full_score2 = masked_score_targets
+                        full_mask2 = masks.bool()
+                        rankic_loss2 = rankic_loss_fn(full_pred2, full_score2, full_mask2)
+                        batch_loss2 = batch_loss2 + rankic_weight * rankic_loss2
+
                     if batch_loss2 is not None:
                         batch_loss2 = batch_loss2 / sequences.size(0)
                     else:

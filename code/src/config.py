@@ -10,12 +10,12 @@ config = {
     'dim_feedforward': 256,
     'batch_size': 2,
     'max_stocks_per_sample': 100,
-    'num_epochs': 60,
+    'num_epochs': 30,
     'learning_rate': 5e-5,
     'dropout': 0.35,
     'feature_num': feature_num,
 
-    'use_stock_embedding': False,
+    'use_stock_embedding': True,
     'stock_emb_dim': 16,
     'use_lazy_dataset': True,
 
@@ -34,14 +34,15 @@ config = {
 
     'label_alpha': 0.3,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase10_abla_cnn',
+    'output_dir': './model/phase11_soft_topk',
     'ensemble_model_dirs': [],
     'data_path': './data',
-    'val_months': 2,
+    'val_months': 0,
+    'use_validation_checkpoint_selection': False,
 
     'warmup_epochs': 5,
     'cosine_min_lr_ratio': 0.01,
-    'early_stopping_patience': 20,
+    'early_stopping_patience': 30,
     'gradient_accumulation_steps': 1,
     'weight_decay': 5e-4,
 
@@ -96,8 +97,17 @@ config = {
 
     # --- SoftRankIC loss ---
     'use_soft_rankic_loss': True,
-    'soft_rankic_weight': 0.3,
+    'soft_rankic_weight': 0.2,
     'soft_rankic_temperature': 0.5,
+
+    # --- Soft top-K return loss ---
+    'use_soft_topk_return_loss': False,
+    'soft_topk_return_weight': 1.0,
+    'soft_topk_k': 5,
+    'soft_topk_rank_temperature': 0.5,
+    'soft_topk_gate_temperature': 0.5,
+    'soft_topk_weight_temperature': 0.5,
+    'soft_topk_gate_margin': 0.5,
 
     # --- CNN feature extractor ---
     'use_cnn_features': True,
