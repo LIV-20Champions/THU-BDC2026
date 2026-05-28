@@ -234,6 +234,80 @@ class SoftRankICLoss(nn.Module):
         return (1.0 - rho).mean()
 
 
+class SoftTopKReturnLoss(nn.Module):
+    """Differentiable expected return of a soft top-K basket.
+
+    Computes soft weights w_i via softmax with a top-K gate so that only
+    the highest-scoring stocks contribute meaningfully.  Minimizes
+    -E[score_target] = -sum_i w_i * score_target_i.
+    """
+    def __init__(self, top_k=5, rank_temperature=0.5, gate_temperature=0.5,
+                 weight_temperature=0.5, gate_margin=0.5, eps=1e-8):
+        super().__init__()
+        self.top_k = top_k
+        self.rank_temperature = rank_temperature
+        self.gate_temperature = gate_temperature
+        self.weight_temperature = weight_temperature
+        self.gate_margin = gate_margin
+        self.eps = eps
+
+    def forward(self, y_pred, score_target, mask=None):
+        if mask is None:
+            mask = torch.ones_like(y_pred, dtype=torch.bool)
+
+        losses = []
+        for i in range(y_pred.size(0)):
+            valid = mask[i].bool()
+            if valid.sum().item() == 0:
+                continue
+            pred = y_pred[i, valid].unsqueeze(0)
+            target = score_target[i, valid].unsqueeze(0)
+            diff = pred.unsqueeze(2) - pred.unsqueeze(1)
+            soft_rank = 1.0 + torch.sigmoid(diff / max(self.rank_temperature, 0.01)).sum(dim=2) - 0.5
+            gate = torch.sigmoid((self.top_k + self.gate_margin - soft_rank) / max(self.gate_temperature, 0.01))
+            raw_weight = torch.softmax(pred / max(self.weight_temperature, 0.01), dim=1) * gate
+            basket_weight = raw_weight / (raw_weight.sum(dim=1, keepdim=True) + self.eps)
+            expected_return = (basket_weight * target).sum(dim=1)
+            losses.append(-expected_return.mean())
+        if not losses:
+            return y_pred.sum() * 0.0
+        return torch.stack(losses).mean()
+
+
+class MaskedSoftRankICLoss(nn.Module):
+    """Masked differentiable Spearman rank correlation loss.
+
+    Same as SoftRankICLoss but respects a boolean mask so padded
+    stocks are ignored in the correlation computation.
+    """
+    def __init__(self, temperature=0.5):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, y_pred, y_true, mask=None):
+        if mask is None:
+            mask = torch.ones_like(y_pred, dtype=torch.bool)
+
+        losses = []
+        for i in range(y_pred.size(0)):
+            valid = mask[i].bool()
+            if valid.sum().item() <= 1:
+                continue
+            pred = y_pred[i, valid].unsqueeze(0)
+            true = y_true[i, valid].unsqueeze(0)
+            diff_pred = pred.unsqueeze(2) - pred.unsqueeze(1)
+            soft_rank_pred = torch.sigmoid(diff_pred / max(self.temperature, 0.01)).sum(dim=2) + 0.5
+            diff_true = true.unsqueeze(2) - true.unsqueeze(1)
+            soft_rank_true = torch.sigmoid(diff_true / max(self.temperature, 0.01)).sum(dim=2) + 0.5
+            pred_c = soft_rank_pred - soft_rank_pred.mean(dim=1, keepdim=True)
+            true_c = soft_rank_true - soft_rank_true.mean(dim=1, keepdim=True)
+            rho = (pred_c * true_c).sum(dim=1) / (pred_c.norm(p=2, dim=1) * true_c.norm(p=2, dim=1) + 1e-8)
+            losses.append((1.0 - rho).mean())
+        if not losses:
+            return y_pred.sum() * 0.0
+        return torch.stack(losses).mean()
+
+
 class EMAWrapper:
     """Exponential Moving Average of model parameters for smoother inference."""
 
@@ -462,15 +536,50 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
     local_step = 0
     optimizer.zero_grad()
     use_amp = scaler is not None
+    use_soft_topk_return = bool(config.get('use_soft_topk_return_loss', False))
     use_soft_rankic = bool(config.get('use_soft_rankic_loss', False))
-    rankic_weight = float(config.get('soft_rankic_weight', 0.3))
-    rankic_loss_fn = SoftRankICLoss(
+    rankic_weight = float(config.get('soft_rankic_weight', 0.2))
+
+    if use_soft_topk_return:
+        topk_loss_fn = SoftTopKReturnLoss(
+            top_k=int(config.get('soft_topk_k', 5)),
+            rank_temperature=float(config.get('soft_topk_rank_temperature', 0.5)),
+            gate_temperature=float(config.get('soft_topk_gate_temperature', 0.5)),
+            weight_temperature=float(config.get('soft_topk_weight_temperature', 0.5)),
+            gate_margin=float(config.get('soft_topk_gate_margin', 0.5)),
+        )
+    else:
+        topk_loss_fn = None
+
+    rankic_loss_fn = MaskedSoftRankICLoss(
         temperature=float(config.get('soft_rankic_temperature', 0.5))
     ) if use_soft_rankic else None
+
+    def _compute_grouped_batch_loss(outputs, score_targets_batch, masks_batch):
+        """Shared loss helper used by both standard and SAM passes."""
+        group_losses = []
+        for i in range(outputs.size(0)):
+            valid = masks_batch[i].bool()
+            if valid.sum().item() <= 1:
+                continue
+            pred = outputs[i, valid].unsqueeze(0)
+            score = score_targets_batch[i, valid].unsqueeze(0)
+            group_mask = torch.ones_like(score, dtype=torch.bool)
+            if use_soft_topk_return:
+                group_loss = topk_loss_fn(pred, score, group_mask)
+            else:
+                group_loss = criterion(pred, score)
+            if rankic_loss_fn is not None and rankic_weight > 0:
+                group_loss = group_loss + rankic_weight * rankic_loss_fn(pred, score, group_mask)
+            group_losses.append(group_loss)
+        if not group_losses:
+            return None
+        return torch.stack(group_losses).mean()
 
     for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Training Epoch {epoch+1}")):
         sequences = batch['sequences'].to(device)
         targets = batch['targets'].to(device)
+        score_targets = batch['score_targets'].to(device)
         masks = batch['masks'].to(device)
         stock_indices = _get_batch_stock_indices(batch, device)
 
@@ -498,28 +607,14 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
 
             masked_outputs = outputs * masks + (1 - masks) * (-1e9)
             masked_targets = targets * masks
+            masked_score_targets = score_targets * masks
 
-            batch_loss = None
-            for i in range(sequences.size(0)):
-                valid_indices = masks[i].nonzero(as_tuple=False).flatten()
-                if valid_indices.numel() <= 1:
-                    continue
-                valid_pred = masked_outputs[i][valid_indices]
-                valid_true = masked_targets[i][valid_indices]
-                loss = criterion(valid_pred.unsqueeze(0), valid_true.unsqueeze(0))
-                batch_loss = batch_loss + loss if isinstance(batch_loss, torch.Tensor) else loss
-
-            # SoftRankIC as additional ranking objective
-            if use_soft_rankic and batch_loss is not None:
-                full_pred = outputs.reshape(masked_outputs.size(0), -1)
-                full_true = masked_targets
-                rankic_loss = rankic_loss_fn(full_pred, full_true)
-                batch_loss = batch_loss + rankic_weight * rankic_loss
+            batch_loss = _compute_grouped_batch_loss(masked_outputs, masked_score_targets, masks)
 
             if batch_loss is not None:
-                batch_loss = batch_loss / (sequences.size(0) * accumulation_steps)
+                batch_loss = batch_loss / accumulation_steps
             else:
-                batch_loss = torch.tensor(0.0, device=sequences.device, requires_grad=True) / (sequences.size(0) * accumulation_steps)
+                batch_loss = torch.tensor(0.0, device=sequences.device, requires_grad=True)
 
         if use_amp:
             scaler.scale(batch_loss).backward()
@@ -540,22 +635,8 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
                 with amp_ctx:
                     outputs2 = model(sequences, stock_indices=stock_indices, stock_mask=masks.bool())
                     masked_outputs2 = outputs2 * masks + (1 - masks) * (-1e9)
-                    batch_loss2 = None
-                    for i in range(sequences.size(0)):
-                        valid_indices = masks[i].nonzero(as_tuple=False).flatten()
-                        if valid_indices.numel() <= 1:
-                            continue
-                        valid_pred = masked_outputs2[i][valid_indices]
-                        valid_true = masked_targets[i][valid_indices]
-                        loss2 = criterion(valid_pred.unsqueeze(0), valid_true.unsqueeze(0))
-                        batch_loss2 = batch_loss2 + loss2 if isinstance(batch_loss2, torch.Tensor) else loss2
 
-                    if use_soft_rankic and batch_loss2 is not None:
-                        full_pred2 = outputs2.reshape(masked_outputs2.size(0), -1)
-                        full_true2 = masked_targets
-                        rankic_loss2 = rankic_loss_fn(full_pred2, full_true2)
-                        batch_loss2 = batch_loss2 + rankic_weight * rankic_loss2
-
+                    batch_loss2 = _compute_grouped_batch_loss(masked_outputs2, masked_score_targets, masks)
                     if batch_loss2 is not None:
                         batch_loss2 = batch_loss2 / sequences.size(0)
                     else:
