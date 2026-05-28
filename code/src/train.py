@@ -197,6 +197,42 @@ class SmoothNDCGLoss(nn.Module):
         return loss
 
 
+class SoftRankICLoss(nn.Module):
+    """Differentiable Spearman rank correlation loss.
+
+    Uses soft ranking (sigmoid-based) to make the discrete ranking operation
+    differentiable.  Optimizing 1-SpearmanR directly aligns training with the
+    ranking objective used in quantitative finance (Rank IC).
+    """
+    def __init__(self, temperature=0.5):
+        super(SoftRankICLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, y_pred, y_true):
+        B, N = y_true.size()
+        eps = 1e-8
+
+        # Soft rank via pairwise sigmoid
+        diff_pred = y_pred.unsqueeze(2) - y_pred.unsqueeze(1)   # [B, N, N]
+        soft_rank_pred = (torch.sigmoid(diff_pred / max(self.temperature, 0.01))
+                          .sum(dim=2) + 0.5)
+
+        diff_true = y_true.unsqueeze(2) - y_true.unsqueeze(1)
+        soft_rank_true = (torch.sigmoid(diff_true / max(self.temperature, 0.01))
+                          .sum(dim=2) + 0.5)
+
+        # Pearson correlation on ranks = Spearman
+        pred_c = soft_rank_pred - soft_rank_pred.mean(dim=1, keepdim=True)
+        true_c = soft_rank_true - soft_rank_true.mean(dim=1, keepdim=True)
+
+        cov = (pred_c * true_c).sum(dim=1)
+        pred_std = pred_c.norm(p=2, dim=1)
+        true_std = true_c.norm(p=2, dim=1)
+
+        rho = cov / (pred_std * true_std + eps)
+        return (1.0 - rho).mean()
+
+
 class EMAWrapper:
     """Exponential Moving Average of model parameters for smoother inference."""
 
@@ -419,6 +455,11 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
     local_step = 0
     optimizer.zero_grad()
     use_amp = scaler is not None
+    use_soft_rankic = bool(config.get('use_soft_rankic_loss', False))
+    rankic_weight = float(config.get('soft_rankic_weight', 0.3))
+    rankic_loss_fn = SoftRankICLoss(
+        temperature=float(config.get('soft_rankic_temperature', 0.5))
+    ) if use_soft_rankic else None
 
     for batch_idx, batch in enumerate(tqdm(dataloader, desc=f"Training Epoch {epoch+1}")):
         sequences = batch['sequences'].to(device)
@@ -461,6 +502,13 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
                 loss = criterion(valid_pred.unsqueeze(0), valid_true.unsqueeze(0))
                 batch_loss = batch_loss + loss if isinstance(batch_loss, torch.Tensor) else loss
 
+            # SoftRankIC as additional ranking objective
+            if use_soft_rankic and batch_loss is not None:
+                full_pred = outputs.reshape(masked_outputs.size(0), -1)
+                full_true = masked_targets
+                rankic_loss = rankic_loss_fn(full_pred, full_true)
+                batch_loss = batch_loss + rankic_weight * rankic_loss
+
             if batch_loss is not None:
                 batch_loss = batch_loss / (sequences.size(0) * accumulation_steps)
             else:
@@ -494,6 +542,13 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
                         valid_true = masked_targets[i][valid_indices]
                         loss2 = criterion(valid_pred.unsqueeze(0), valid_true.unsqueeze(0))
                         batch_loss2 = batch_loss2 + loss2 if isinstance(batch_loss2, torch.Tensor) else loss2
+
+                    if use_soft_rankic and batch_loss2 is not None:
+                        full_pred2 = outputs2.reshape(masked_outputs2.size(0), -1)
+                        full_true2 = masked_targets
+                        rankic_loss2 = rankic_loss_fn(full_pred2, full_true2)
+                        batch_loss2 = batch_loss2 + rankic_weight * rankic_loss2
+
                     if batch_loss2 is not None:
                         batch_loss2 = batch_loss2 / sequences.size(0)
                     else:
