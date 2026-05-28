@@ -20,6 +20,31 @@ import math
 from sam import SAM
 
 
+class DailyBatchSampler(torch.utils.data.Sampler):
+    """Groups samples by trading date. Each batch = one full day of stocks.
+
+    Ensures cross-sectional ranking signal is preserved — the model sees
+    the full stock universe for each date in a single forward pass.
+    """
+    def __init__(self, dataset, shuffle=False):
+        from collections import defaultdict
+        self.shuffle = shuffle
+        daily_groups = defaultdict(list)
+        for i in range(len(dataset)):
+            date = dataset.samples[i]['date']
+            daily_groups[date].append(i)
+        self.batches = list(daily_groups.values())
+
+    def __iter__(self):
+        order = torch.randperm(len(self.batches)).tolist() if self.shuffle \
+                else range(len(self.batches))
+        for i in order:
+            yield self.batches[i]
+
+    def __len__(self):
+        return len(self.batches)
+
+
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -992,20 +1017,20 @@ def main():
     if not no_val and len(val_dataset) == 0:
         raise ValueError("验证排序样本数为 0，请检查 val_months、sequence_length 或样本构造逻辑。")
 
+    train_sampler = DailyBatchSampler(train_dataset, shuffle=True)
     train_loader = DataLoader(
-        train_dataset, batch_size=config['batch_size'], shuffle=True,
+        train_dataset, batch_sampler=train_sampler,
         collate_fn=collate_fn,
-        num_workers=int(config.get('num_workers', 0)),
-        pin_memory=bool(config.get('pin_memory', False)),
-        persistent_workers=int(config.get('num_workers', 0)) > 0,
+        num_workers=0,
+        pin_memory=False,
     )
     if not no_val:
+        val_sampler = DailyBatchSampler(val_dataset, shuffle=False)
         val_loader = DataLoader(
-            val_dataset, batch_size=config['batch_size'], shuffle=False,
+            val_dataset, batch_sampler=val_sampler,
             collate_fn=collate_fn,
-            num_workers=int(config.get('num_workers', 0)),
-            pin_memory=bool(config.get('pin_memory', False)),
-            persistent_workers=int(config.get('num_workers', 0)) > 0,
+            num_workers=0,
+            pin_memory=False,
         )
     else:
         val_loader = None
