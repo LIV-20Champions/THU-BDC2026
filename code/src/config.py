@@ -10,7 +10,7 @@ config = {
     'dim_feedforward': 256,
     'batch_size': 2,
     'max_stocks_per_sample': 100,
-    'num_epochs': 30,
+    'num_epochs': 15,
     'learning_rate': 5e-5,
     'dropout': 0.35,
     'feature_num': feature_num,
@@ -34,11 +34,10 @@ config = {
 
     'label_alpha': 0.3,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase11_soft_topk',
+    'output_dir': './model/phase12_daily',
     'ensemble_model_dirs': [],
     'data_path': './data',
-    'val_months': 0,
-    'use_validation_checkpoint_selection': False,
+    'val_months': 2,
 
     'warmup_epochs': 5,
     'cosine_min_lr_ratio': 0.01,
@@ -47,11 +46,11 @@ config = {
     'weight_decay': 5e-4,
 
     # --- SAM optimizer ---
-    'use_sam': True,
+    'use_sam': False,           # confirmed harmful — causes score collapse
     'sam_rho': 0.02,
 
     # --- Cosine warm restarts ---
-    'use_cosine_restarts': True,
+    'use_cosine_restarts': False,
     'cosine_restart_T0': 10,
     'cosine_restart_T_mult': 2,
 
@@ -85,9 +84,9 @@ config = {
     'ms_long_layers': 1,
     'ms_fusion_mode': 'linear',
 
-    'use_smooth_ndcg_loss': True,
-    'smooth_ndcg_weight': 0.6,
-    'lambda_pairwise_weight': 0.4,
+    'use_smooth_ndcg_loss': False,
+    'smooth_ndcg_weight': 0.0,
+    'lambda_pairwise_weight': 0.0,
     'ndcg_top_k': 5,
     'soft_sort_temperature': 0.2,
     'temperature_anneal_start': 2.0,
@@ -96,21 +95,12 @@ config = {
     'lambda_delta_clip': 10.0,
 
     # --- SoftRankIC loss ---
-    'use_soft_rankic_loss': True,
+    'use_soft_rankic_loss': False,
     'soft_rankic_weight': 0.2,
     'soft_rankic_temperature': 0.5,
 
-    # --- Soft top-K return loss ---
-    'use_soft_topk_return_loss': False,
-    'soft_topk_return_weight': 1.0,
-    'soft_topk_k': 5,
-    'soft_topk_rank_temperature': 0.5,
-    'soft_topk_gate_temperature': 0.5,
-    'soft_topk_weight_temperature': 0.5,
-    'soft_topk_gate_margin': 0.5,
-
     # --- CNN feature extractor ---
-    'use_cnn_features': True,
+    'use_cnn_features': False,
     'cnn_feature_dim': 32,
 
     'use_mse_aux_loss': True,
