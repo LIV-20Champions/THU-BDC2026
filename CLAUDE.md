@@ -98,3 +98,25 @@ Final submission is a Docker image exported as `.tar`. Inside the container, `da
 ## 关键约束
 
 - Worktree 隔离不可用，所有开发在主会话内联执行
+
+## 实验经验
+
+- **分数确定性**：5 模型集成 + 固定 seeds (42,49,56,63,70) 下分数 0.0673 完全可复现。改特征集/embedding/架构参数均不影响最终排序——这是当前数据的信息天花板
+- **验证集反相关**：val score 与 test self-score 负相关。不要用 val score 选模型——用固定 epoch 数或取末轮模型
+- **SAM 约束**：启用 SAM 时 gradient_accumulation_steps 必须为 1，代码未自动强制。SAM 的二次前向传播与梯度累积冲突
+- **特征函数命名**：engineer_features_158 实际生成 ~39 特征，engineer_features_39 实际生成 ~158 特征。feature_engineer_func_map 的 key 是权威入口
+- **大参数均退化**：VSN (+300K)、MultiScale (+200K) 在 422 样本上无论如何都会退化。SAM 无法挽救参数量过大
+- **158+39/横截面特征不增效**：在 SAM 下无害但也不提升分数，说明 39 维特征已包含全部有效信号
+
+## 调试注意事项
+
+- Python 多行命令在 Bash 工具中会报 SyntaxError——使用 Write 工具创建临时脚本再运行
+- 训练前必须 `rm -rf model/<output_dir>` 否则旧模型残留
+- `__pycache__` 不会导致过期问题（pyc 随 py 同步更新）
+
+## 关键文件位置
+
+- 竞争入口：`python code/src/train.py`（训练）然后 `python code/src/predict.py`（预测）
+- 自评：`python test/score_self.py`
+- 数据集：`data/stock_data.csv`（主数据），`data/stock_data_April.csv`（新数据）
+- 训练/测试分割：`data/split_train_test.py`
