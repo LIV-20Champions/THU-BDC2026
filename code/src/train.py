@@ -61,7 +61,8 @@ def _build_label_and_clean(processed, drop_small_open=True, label_alpha=0.3):
     ret_t1t3 = (processed['open_t3'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
     ret_t1t5 = (processed['open_t5'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
     processed['label'] = label_alpha * ret_t1t3 + (1.0 - label_alpha) * ret_t1t5
-    processed = processed.dropna(subset=['label'])
+    processed['score_target'] = ret_t1t5
+    processed = processed.dropna(subset=['label', 'score_target'])
 
     processed.drop(columns=['open_t1', 'open_t3', 'open_t5'], inplace=True)
     return processed
@@ -389,17 +390,19 @@ def collate_fn(batch):
     sequences = [item['sequences'] for item in batch]
     targets = [item['targets'] for item in batch]
     relevance = [item['relevance'] for item in batch]
+    score_targets = [item['score_targets'] for item in batch]
     stock_indices = [item['stock_indices'].long() for item in batch]
 
     max_stocks = max(seq.size(0) for seq in sequences)
 
     padded_sequences = []
     padded_targets = []
+    padded_score_targets = []
     padded_relevance = []
     padded_stock_indices = []
     masks = []
 
-    for seq, tgt, rel, stock_idx in zip(sequences, targets, relevance, stock_indices):
+    for seq, tgt, score_tgt, rel, stock_idx in zip(sequences, targets, score_targets, relevance, stock_indices):
         num_stocks = seq.size(0)
         seq_len = seq.size(1)
         feature_dim = seq.size(2)
@@ -408,11 +411,13 @@ def collate_fn(batch):
             pad_size = max_stocks - num_stocks
             seq_pad = torch.zeros(pad_size, seq_len, feature_dim)
             tgt_pad = torch.zeros(pad_size)
+            score_pad = torch.zeros(pad_size)
             rel_pad = torch.zeros(pad_size)
             stock_pad = torch.full((pad_size,), -1, dtype=torch.long)
 
             seq = torch.cat([seq, seq_pad], dim=0)
             tgt = torch.cat([tgt, tgt_pad], dim=0)
+            score_tgt = torch.cat([score_tgt, score_pad], dim=0)
             rel = torch.cat([rel, rel_pad], dim=0)
             stock_idx = torch.cat([stock_idx, stock_pad], dim=0)
 
@@ -421,6 +426,7 @@ def collate_fn(batch):
 
         padded_sequences.append(seq)
         padded_targets.append(tgt)
+        padded_score_targets.append(score_tgt)
         padded_relevance.append(rel)
         padded_stock_indices.append(stock_idx)
         masks.append(mask)
@@ -428,6 +434,7 @@ def collate_fn(batch):
     result = {
         'sequences': torch.stack(padded_sequences),
         'targets': torch.stack(padded_targets),
+        'score_targets': torch.stack(padded_score_targets),
         'relevance': torch.stack(padded_relevance),
         'stock_indices': torch.stack(padded_stock_indices).long(),
         'masks': torch.stack(masks),

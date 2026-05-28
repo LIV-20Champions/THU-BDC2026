@@ -419,12 +419,12 @@ class LazyRankingDataset(torch.utils.data.Dataset):
         df = df.rename(columns={'日期': 'datetime'})
         df['datetime'] = pd.to_datetime(df['datetime'])
         df = df.sort_values(['instrument', 'datetime']).reset_index(drop=True)
-        df = df.dropna(subset=['label'])
+        df = df.dropna(subset=['label', 'score_target'])
 
         if min_window_end_date is not None:
             min_window_end_date = pd.to_datetime(min_window_end_date).to_datetime64()
 
-        sample_buckets = defaultdict(lambda: {'entries': [], 'targets': []})
+        sample_buckets = defaultdict(lambda: {'entries': [], 'targets': [], 'score_targets': []})
 
         for stock_code, group in tqdm(df.groupby('instrument'), desc=f"构建{dataset_name}索引"):
             if len(group) < self.sequence_length:
@@ -432,6 +432,7 @@ class LazyRankingDataset(torch.utils.data.Dataset):
 
             feature_values = group[self.features].values.astype(np.float32)
             labels = group['label'].values.astype(np.float32)
+            score_targets = group['score_target'].values.astype(np.float32)
             dates = pd.to_datetime(group['datetime']).values
 
             if self.use_per_stock_norm:
@@ -456,6 +457,7 @@ class LazyRankingDataset(torch.utils.data.Dataset):
                 bucket = sample_buckets[end_date]
                 bucket['entries'].append((int(stock_code), int(end_idx)))
                 bucket['targets'].append(float(target))
+                bucket['score_targets'].append(float(score_targets[end_idx]))
 
         for date in tqdm(sorted(sample_buckets.keys()), desc=f"整理{dataset_name}样本"):
             bucket = sample_buckets[date]
@@ -463,6 +465,7 @@ class LazyRankingDataset(torch.utils.data.Dataset):
                 continue
 
             day_targets = np.asarray(bucket['targets'], dtype=np.float32)
+            score_targets_day = np.asarray(bucket['score_targets'], dtype=np.float32)
             sorted_indices = np.argsort(day_targets)[::-1]
             relevance = np.zeros_like(day_targets, dtype=np.float32)
             for rank, idx in enumerate(sorted_indices):
@@ -474,6 +477,7 @@ class LazyRankingDataset(torch.utils.data.Dataset):
                 'date': date,
                 'entries': bucket['entries'],
                 'targets': day_targets,
+                'score_targets': score_targets_day,
                 'relevance': relevance,
                 'stock_indices': stock_indices,
             })
@@ -504,10 +508,12 @@ class LazyRankingDataset(torch.utils.data.Dataset):
             perm = np.random.permutation(len(entries))[:max_stocks]
             entries = [entries[i] for i in perm]
             targets_sub = sample['targets'][perm]
+            score_targets_sub = sample['score_targets'][perm]
             relevance_sub = sample['relevance'][perm]
             stock_indices_sub = sample['stock_indices'][perm]
         else:
             targets_sub = sample['targets']
+            score_targets_sub = sample['score_targets']
             relevance_sub = sample['relevance']
             stock_indices_sub = sample['stock_indices']
 
@@ -526,6 +532,7 @@ class LazyRankingDataset(torch.utils.data.Dataset):
         return {
             'sequences': torch.from_numpy(sequences),
             'targets': torch.from_numpy(targets_sub.astype(np.float32)),
+            'score_targets': torch.from_numpy(score_targets_sub.astype(np.float32)),
             'relevance': torch.from_numpy(relevance_sub.astype(np.float32)),
             'stock_indices': torch.from_numpy(stock_indices_sub.astype(np.int64)),
         }
