@@ -34,7 +34,7 @@ config = {
 
     'label_alpha': 0.3,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase10_rankic_cnn',
+    'output_dir': './model/phase10_abla_cnn',
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
