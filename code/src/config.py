@@ -34,7 +34,7 @@ config = {
 
     'label_alpha': 0.3,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase9_final',
+    'output_dir': './model/phase10_rankic_cnn',
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
@@ -93,6 +93,16 @@ config = {
     'temperature_anneal_target': 0.5,
     'temperature_anneal_epochs': 30,
     'lambda_delta_clip': 10.0,
+
+    # --- SoftRankIC loss ---
+    'use_soft_rankic_loss': True,
+    'soft_rankic_weight': 0.3,
+    'soft_rankic_temperature': 0.5,
+
+    # --- CNN feature extractor ---
+    'use_cnn_features': True,
+    'cnn_feature_dim': 32,
+
     'use_mse_aux_loss': True,
     'mse_aux_weight': 0.05,
 
