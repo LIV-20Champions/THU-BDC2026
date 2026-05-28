@@ -327,6 +327,37 @@ class MultiScaleTemporalEncoder(nn.Module):
         return fused
 
 
+class CNNFeatureExtractor(nn.Module):
+    """1D CNN feature extractor inspired by AlphaNet.
+
+    Applies temporal convolutions to raw stock features to learn
+    new time-series patterns.  Output concat'd with original features
+    before the Transformer encoder.
+    """
+    def __init__(self, in_channels, out_channels=32, kernel_sizes=None):
+        super(CNNFeatureExtractor, self).__init__()
+        if kernel_sizes is None:
+            kernel_sizes = [3, 5, 3]
+        mid = 64
+
+        self.conv1 = nn.Conv1d(in_channels, mid, kernel_sizes[0], padding=kernel_sizes[0]//2)
+        self.bn1 = nn.BatchNorm1d(mid)
+        self.conv2 = nn.Conv1d(mid, mid, kernel_sizes[1], padding=kernel_sizes[1]//2)
+        self.bn2 = nn.BatchNorm1d(mid)
+        self.conv3 = nn.Conv1d(mid, out_channels, kernel_sizes[2], padding=kernel_sizes[2]//2)
+        self.bn3 = nn.BatchNorm1d(out_channels)
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        # x: [B*N, L, F] -> transpose to [B*N, F, L] for Conv1d
+        x_t = x.transpose(1, 2)
+        x_t = self.activation(self.bn1(self.conv1(x_t)))
+        x_t = self.activation(self.bn2(self.conv2(x_t)))
+        x_t = self.activation(self.bn3(self.conv3(x_t)))
+        # Back to [B*N, L, out_channels]
+        return x_t.transpose(1, 2)
+
+
 class StockTransformer(nn.Module):
     def __init__(self, input_dim, config, num_stocks, emb_dim=16):
         super(StockTransformer, self).__init__()
@@ -363,6 +394,23 @@ class StockTransformer(nn.Module):
         else:
             self.input_vsn = None
             self.input_proj = nn.Linear(numeric_input_dim, d_model)
+
+        # CNN feature extractor (AlphaNet-style, parallel path to TA-Lib)
+        self.use_cnn_features = bool(config.get("use_cnn_features", False))
+        if self.use_cnn_features:
+            cnn_out_dim = int(config.get("cnn_feature_dim", 32))
+            self.cnn_extractor = CNNFeatureExtractor(
+                in_channels=numeric_input_dim,
+                out_channels=cnn_out_dim,
+            )
+            self.cnn_proj = nn.Sequential(
+                nn.Linear(cnn_out_dim, d_model),
+                nn.LayerNorm(d_model),
+                nn.Dropout(dropout),
+            )
+            self.fusion_proj = nn.Linear(d_model * 2, d_model)
+        else:
+            self.cnn_extractor = None
 
         # stock embedding
         if self.use_stock_embedding:
@@ -524,6 +572,12 @@ class StockTransformer(nn.Module):
                 src_proj = self.input_vsn(src_reshaped)
         else:
             src_proj = self.input_proj(src_reshaped)
+
+        # CNN feature extraction (parallel path, concat then fuse)
+        if self.use_cnn_features:
+            src_cnn = self.cnn_extractor(src_reshaped)
+            src_cnn_proj = self.cnn_proj(src_cnn)
+            src_proj = self.fusion_proj(torch.cat([src_proj, src_cnn_proj], dim=-1))
 
         # stock embedding
         if self.use_stock_embedding:
