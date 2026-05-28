@@ -62,8 +62,37 @@ def _build_label_and_clean(processed, drop_small_open=True, label_alpha=0.3):
     ret_t1t5 = (processed['open_t5'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
     processed['label'] = label_alpha * ret_t1t3 + (1.0 - label_alpha) * ret_t1t5
     processed['score_target'] = ret_t1t5
-    processed = processed.dropna(subset=['label', 'score_target'])
 
+    # --- CSZScoreNorm + DropExtremeLabel (per trading day) ---
+    # Drop top/bottom 2.5% extreme labels, then z-score normalize within each day.
+    # This removes event-driven outliers and makes label scale consistent across days.
+    processed['_date_tmp'] = processed['日期'].copy()
+    for date, group in processed.groupby('_date_tmp'):
+        day_idx = group.index
+        labels = group['label'].values
+        n = len(labels)
+        if n < 20:
+            continue
+        # DropExtremeLabel: mask top 2.5% and bottom 2.5%
+        sorted_idx = np.argsort(labels)
+        drop_n = int(0.025 * n)
+        if drop_n > 0:
+            drop_mask = np.concatenate([sorted_idx[:drop_n], sorted_idx[-drop_n:]])
+            processed.loc[day_idx[drop_mask], 'label'] = np.nan
+            processed.loc[day_idx[drop_mask], 'score_target'] = np.nan
+        # CSZScoreNorm: z-score the remaining labels within this day
+        valid = processed.loc[day_idx, 'label'].notna()
+        if valid.sum() < 10:
+            continue
+        mean_val = processed.loc[day_idx[valid], 'label'].mean()
+        std_val = processed.loc[day_idx[valid], 'label'].std()
+        if std_val > 1e-8:
+            processed.loc[day_idx[valid], 'label'] = (
+                (processed.loc[day_idx[valid], 'label'] - mean_val) / std_val
+            )
+    processed.drop(columns=['_date_tmp'], inplace=True)
+
+    processed = processed.dropna(subset=['label', 'score_target'])
     processed.drop(columns=['open_t1', 'open_t3', 'open_t5'], inplace=True)
     return processed
 
@@ -538,9 +567,12 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
     total_metrics = {}
     local_step = 0
     optimizer.zero_grad()
-    use_amp = scaler is not None
+    # AMP and SAM together are numerically unstable here; fall back to full precision
+    # whenever SAM is active.
+    use_amp = (scaler is not None) and (not use_sam)
     use_soft_topk_return = bool(config.get('use_soft_topk_return_loss', False))
     use_soft_rankic = bool(config.get('use_soft_rankic_loss', False))
+    topk_return_weight = float(config.get('soft_topk_return_weight', 1.0))
     rankic_weight = float(config.get('soft_rankic_weight', 0.2))
 
     if use_soft_topk_return:
@@ -558,7 +590,7 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
         temperature=float(config.get('soft_rankic_temperature', 0.5))
     ) if use_soft_rankic else None
 
-    def _compute_grouped_batch_loss(outputs, score_targets_batch, masks_batch):
+    def _compute_grouped_batch_loss(outputs, labels_batch, score_targets_batch, masks_batch):
         """Shared loss helper used by both standard and SAM passes."""
         group_losses = []
         for i in range(outputs.size(0)):
@@ -566,14 +598,15 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
             if valid.sum().item() <= 1:
                 continue
             pred = outputs[i, valid].unsqueeze(0)
+            label = labels_batch[i, valid].unsqueeze(0)
             score = score_targets_batch[i, valid].unsqueeze(0)
             group_mask = torch.ones_like(score, dtype=torch.bool)
             if use_soft_topk_return:
-                group_loss = topk_loss_fn(pred, score, group_mask)
+                group_loss = topk_return_weight * topk_loss_fn(pred, score, group_mask)
             else:
-                group_loss = criterion(pred, score)
+                group_loss = criterion(pred, label)
             if rankic_loss_fn is not None and rankic_weight > 0:
-                group_loss = group_loss + rankic_weight * rankic_loss_fn(pred, score, group_mask)
+                group_loss = group_loss + rankic_weight * rankic_loss_fn(pred, label, group_mask)
             group_losses.append(group_loss)
         if not group_losses:
             return None
@@ -597,6 +630,7 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
                     inv_lbd = 1.0 - lbd
                     sequences[b, valid_idx] = lbd * sequences[b, valid_idx] + inv_lbd * sequences[b, perm_idx]
                     targets[b, valid_idx] = lbd * targets[b, valid_idx] + inv_lbd * targets[b, perm_idx]
+                    score_targets[b, valid_idx] = lbd * score_targets[b, valid_idx] + inv_lbd * score_targets[b, perm_idx]
 
         if use_label_smoothing:
             num = targets.size(1)
@@ -612,28 +646,14 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
             masked_targets = targets * masks
             masked_score_targets = score_targets * masks
 
-            # Use score_target (pure 5-day return) with criterion, + MaskedSoftRankIC
-            batch_loss = None
-            for i in range(sequences.size(0)):
-                valid_indices = masks[i].nonzero(as_tuple=False).flatten()
-                if valid_indices.numel() <= 1:
-                    continue
-                valid_pred = masked_outputs[i][valid_indices]
-                valid_score = masked_score_targets[i][valid_indices]
-                loss = criterion(valid_pred.unsqueeze(0), valid_score.unsqueeze(0))
-                batch_loss = batch_loss + loss if isinstance(batch_loss, torch.Tensor) else loss
-
-            if use_soft_rankic and batch_loss is not None:
-                full_pred = outputs.reshape(masked_outputs.size(0), -1)
-                full_score = masked_score_targets
-                full_mask = masks.bool()
-                rankic_loss = rankic_loss_fn(full_pred, full_score, full_mask)
-                batch_loss = batch_loss + rankic_weight * rankic_loss
+            batch_loss = _compute_grouped_batch_loss(
+                masked_outputs, targets, score_targets, masks
+            )
 
             if batch_loss is not None:
-                batch_loss = batch_loss / (sequences.size(0) * accumulation_steps)
+                batch_loss = batch_loss / accumulation_steps
             else:
-                batch_loss = torch.tensor(0.0, device=sequences.device, requires_grad=True) / (sequences.size(0) * accumulation_steps)
+                batch_loss = torch.tensor(0.0, device=sequences.device, requires_grad=True) / accumulation_steps
 
         if use_amp:
             scaler.scale(batch_loss).backward()
@@ -655,27 +675,14 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
                     outputs2 = model(sequences, stock_indices=stock_indices, stock_mask=masks.bool())
                     masked_outputs2 = outputs2 * masks + (1 - masks) * (-1e9)
 
-                    batch_loss2 = None
-                    for i in range(sequences.size(0)):
-                        valid_indices = masks[i].nonzero(as_tuple=False).flatten()
-                        if valid_indices.numel() <= 1:
-                            continue
-                        valid_pred = masked_outputs2[i][valid_indices]
-                        valid_score = masked_score_targets[i][valid_indices]
-                        loss2 = criterion(valid_pred.unsqueeze(0), valid_score.unsqueeze(0))
-                        batch_loss2 = batch_loss2 + loss2 if isinstance(batch_loss2, torch.Tensor) else loss2
-
-                    if use_soft_rankic and batch_loss2 is not None:
-                        full_pred2 = outputs2.reshape(masked_outputs2.size(0), -1)
-                        full_score2 = masked_score_targets
-                        full_mask2 = masks.bool()
-                        rankic_loss2 = rankic_loss_fn(full_pred2, full_score2, full_mask2)
-                        batch_loss2 = batch_loss2 + rankic_weight * rankic_loss2
+                    batch_loss2 = _compute_grouped_batch_loss(
+                        masked_outputs2, targets, score_targets, masks
+                    )
 
                     if batch_loss2 is not None:
-                        batch_loss2 = batch_loss2 / sequences.size(0)
+                        batch_loss2 = batch_loss2 / accumulation_steps
                     else:
-                        batch_loss2 = torch.tensor(0.0, device=sequences.device, requires_grad=True) / sequences.size(0)
+                        batch_loss2 = torch.tensor(0.0, device=sequences.device, requires_grad=True) / accumulation_steps
 
                 if use_amp:
                     scaler.scale(batch_loss2).backward()
@@ -700,7 +707,7 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
 
             total_loss += batch_loss.item() * accumulation_steps
             with torch.no_grad():
-                metrics = calculate_ranking_metrics(masked_outputs, masked_targets, masks, k=5)
+                metrics = calculate_ranking_metrics(masked_outputs, masked_score_targets, masks, k=5)
                 for k, v in metrics.items():
                     total_metrics[k] = total_metrics.get(k, 0.0) + v
             local_step += 1
@@ -723,11 +730,48 @@ def evaluate_ranking_model(model, dataloader, criterion, device, writer, epoch, 
     total_loss = 0.0
     total_metrics = {}
     num_batches = 0
+    use_soft_topk_return = bool(config.get('use_soft_topk_return_loss', False))
+    use_soft_rankic = bool(config.get('use_soft_rankic_loss', False))
+    topk_return_weight = float(config.get('soft_topk_return_weight', 1.0))
+    rankic_weight = float(config.get('soft_rankic_weight', 0.2))
+
+    topk_loss_fn = SoftTopKReturnLoss(
+        top_k=int(config.get('soft_topk_k', 5)),
+        rank_temperature=float(config.get('soft_topk_rank_temperature', 0.5)),
+        gate_temperature=float(config.get('soft_topk_gate_temperature', 0.5)),
+        weight_temperature=float(config.get('soft_topk_weight_temperature', 0.5)),
+        gate_margin=float(config.get('soft_topk_gate_margin', 0.5)),
+    ) if use_soft_topk_return else None
+    rankic_loss_fn = MaskedSoftRankICLoss(
+        temperature=float(config.get('soft_rankic_temperature', 0.5))
+    ) if use_soft_rankic else None
+
+    def _eval_grouped_batch_loss(outputs, labels_batch, score_targets_batch, masks_batch):
+        group_losses = []
+        for i in range(outputs.size(0)):
+            valid = masks_batch[i].bool()
+            if valid.sum().item() <= 1:
+                continue
+            pred = outputs[i, valid].unsqueeze(0)
+            label = labels_batch[i, valid].unsqueeze(0)
+            score = score_targets_batch[i, valid].unsqueeze(0)
+            group_mask = torch.ones_like(score, dtype=torch.bool)
+            if use_soft_topk_return:
+                group_loss = topk_return_weight * topk_loss_fn(pred, score, group_mask)
+            else:
+                group_loss = criterion(pred, label)
+            if rankic_loss_fn is not None and rankic_weight > 0:
+                group_loss = group_loss + rankic_weight * rankic_loss_fn(pred, label, group_mask)
+            group_losses.append(group_loss)
+        if not group_losses:
+            return None
+        return torch.stack(group_losses).mean()
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc=f"Evaluating Epoch {epoch+1}"):
             sequences = batch['sequences'].to(device)
             targets = batch['targets'].to(device)
+            score_targets = batch['score_targets'].to(device)
             masks = batch['masks'].to(device)
             stock_indices = _get_batch_stock_indices(batch, device)
 
@@ -736,22 +780,16 @@ def evaluate_ranking_model(model, dataloader, criterion, device, writer, epoch, 
 
                 masked_outputs = outputs * masks + (1 - masks) * (-1e9)
                 masked_targets = targets * masks
+                masked_score_targets = score_targets * masks
 
-                batch_loss = None
-                for i in range(sequences.size(0)):
-                    valid_indices = masks[i].nonzero(as_tuple=False).flatten()
-                    if valid_indices.numel() <= 1:
-                        continue
-                    valid_pred = masked_outputs[i][valid_indices]
-                    valid_true = masked_targets[i][valid_indices]
-                    loss = criterion(valid_pred.unsqueeze(0), valid_true.unsqueeze(0))
-                    batch_loss = batch_loss + loss if batch_loss is not None else loss
+                batch_loss = _eval_grouped_batch_loss(
+                    masked_outputs, targets, score_targets, masks
+                )
 
                 if batch_loss is not None:
-                    batch_loss = batch_loss / sequences.size(0)
                     total_loss += batch_loss.item()
 
-            metrics = calculate_ranking_metrics(masked_outputs, masked_targets, masks, k=5)
+            metrics = calculate_ranking_metrics(masked_outputs, masked_score_targets, masks, k=5)
             for k, v in metrics.items():
                 total_metrics[k] = total_metrics.get(k, 0.0) + v
             num_batches += 1
@@ -1039,6 +1077,11 @@ def main():
     else:
         optimizer = base_optimizer
         print("使用标准 AdamW 优化器")
+
+    if use_sam and use_amp:
+        use_amp = False
+        scaler = None
+        print("AMP disabled because SAM is enabled")
 
     warmup_epochs = int(config.get('warmup_epochs', 5))
     use_cosine_restarts = bool(config.get('use_cosine_restarts', False))
