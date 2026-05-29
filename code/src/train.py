@@ -68,13 +68,11 @@ def get_feature_engineering_workers(num_groups):
     return max(1, min(int(configured), mp.cpu_count(), max(1, int(num_groups))))
 
 
-def _build_label_and_clean(processed, drop_small_open=True, label_alpha=0.3):
-    """Build label from future open-to-open returns, using open_t1 as base price.
+def _build_label_and_clean(processed, drop_small_open=True, label_alpha=0.0):
+    """Build label from future open-to-open returns.
 
-    label = alpha * ret(open_t1 -> open_t3) + (1-alpha) * ret(open_t1 -> open_t5)
-    where ret(A -> B) = (B - A) / A
-
-    Default alpha=0.3 means 30% weight on t1→t3, 70% on t1→t5 (matching original).
+    label = alpha * ret(t1→t3) + (1-alpha) * ret(t1→t5)
+    Default alpha=0.0 means pure t1→t5 (cleanest signal, classmate-style).
     """
     processed['open_t1'] = processed.groupby('股票代码')['开盘'].shift(-1)
     processed['open_t3'] = processed.groupby('股票代码')['开盘'].shift(-3)
@@ -87,31 +85,6 @@ def _build_label_and_clean(processed, drop_small_open=True, label_alpha=0.3):
     ret_t1t5 = (processed['open_t5'] - processed['open_t1']) / (processed['open_t1'] + 1e-12)
     processed['label'] = label_alpha * ret_t1t3 + (1.0 - label_alpha) * ret_t1t5
     processed['score_target'] = ret_t1t5
-
-    # --- CSZScoreNorm + DropExtremeLabel (per trading day) ---
-    processed['_date_tmp'] = processed['日期'].copy()
-    for date, group in processed.groupby('_date_tmp'):
-        day_idx = group.index
-        labels = group['label'].values
-        n = len(labels)
-        if n < 20:
-            continue
-        sorted_idx = np.argsort(labels)
-        drop_n = int(0.025 * n)
-        if drop_n > 0:
-            drop_mask = np.concatenate([sorted_idx[:drop_n], sorted_idx[-drop_n:]])
-            processed.loc[day_idx[drop_mask], 'label'] = np.nan
-            processed.loc[day_idx[drop_mask], 'score_target'] = np.nan
-        valid = processed.loc[day_idx, 'label'].notna()
-        if valid.sum() < 10:
-            continue
-        mean_val = processed.loc[day_idx[valid], 'label'].mean()
-        std_val = processed.loc[day_idx[valid], 'label'].std()
-        if std_val > 1e-8:
-            processed.loc[day_idx[valid], 'label'] = (
-                (processed.loc[day_idx[valid], 'label'] - mean_val) / std_val
-            )
-    processed.drop(columns=['_date_tmp'], inplace=True)
 
     processed = processed.dropna(subset=['label', 'score_target'])
     processed.drop(columns=['open_t1', 'open_t3', 'open_t5'], inplace=True)
@@ -145,6 +118,18 @@ def _preprocess_common(df, stockid2idx, desc, drop_small_open=True):
 
     label_alpha = float(config.get('label_alpha', 0.3))
     processed = _build_label_and_clean(processed, drop_small_open=drop_small_open, label_alpha=label_alpha)
+
+    # Cross-sectional rank normalize features (classmate-style)
+    if config.get('use_cross_sectional_rank', False):
+        from utils import cross_sectional_rank_normalize
+        processed = cross_sectional_rank_normalize(
+            processed,
+            date_col='日期',
+            feature_cols=[f for f in feature_columns if f != 'instrument'],
+            skip_cols=set(config.get('cross_sectional_rank_skip_cols', ['instrument'])),
+        )
+        print("特征截面Rank归一化已完成")
+
     processed, feature_columns = add_market_features(processed, feature_columns)
     return processed, feature_columns
 
@@ -360,6 +345,81 @@ class MaskedSoftRankICLoss(nn.Module):
         if not losses:
             return y_pred.sum() * 0.0
         return torch.stack(losses).mean()
+
+
+class MarginRankingLoss(nn.Module):
+    """Pairwise margin ranking loss from 'On Evaluating Loss Functions for Stock Ranking'.
+
+    L = max(0, -(pred_i - pred_j) * sign(y_i - y_j) + margin)
+
+    This directly optimizes the relative ordering of stock pairs, which
+    the paper found to be the best-performing loss for stock ranking
+    (16.23% annual return vs 14.78% for MSE on S&P 500).
+    """
+    def __init__(self, margin=0.1):
+        super().__init__()
+        self.margin = margin
+
+    def forward(self, y_pred, y_true):
+        B, N = y_true.size()
+        device = y_pred.device
+
+        # Pairwise differences
+        pred_diff = y_pred.unsqueeze(2) - y_pred.unsqueeze(1)  # [B, N, N]
+        true_sign = torch.sign(y_true.unsqueeze(2) - y_true.unsqueeze(1))  # [B, N, N]
+
+        # Only consider pairs with non-zero true difference
+        valid_mask = (true_sign != 0).float()
+
+        # Margin ranking: max(0, -true_sign * pred_diff + margin)
+        losses = torch.clamp(-true_sign * pred_diff + self.margin, min=0.0)
+
+        # Average over valid pairs
+        n_pairs = valid_mask.sum(dim=[1, 2]).clamp(min=1)
+        return (losses * valid_mask).sum(dim=[1, 2]).div(n_pairs).mean()
+
+
+class WeightedRankingLoss(nn.Module):
+    """Listwise KL + weighted pairwise loss, directly on real returns.
+
+    Key design (from classmate's approach):
+    - Top-5 stocks get higher weight (top5_weight vs base_weight)
+    - listwise: KL divergence between softmax(pred/T) and softmax(true/T)
+    - pairwise: sigmoid loss weighted by relative importance
+    """
+    def __init__(self, temperature=0.07, k=5, top5_weight=3.0, base_weight=1.0, pairwise_weight=1):
+        super().__init__()
+        self.temperature = temperature
+        self.k = k
+        self.top5_weight = top5_weight
+        self.base_weight = base_weight
+        self.pairwise_weight = pairwise_weight
+
+    def forward(self, y_pred, y_true):
+        B, N = y_true.size()
+        k = min(self.k, N)
+        device = y_pred.device
+
+        # Top-k weighting
+        _, top_indices = torch.topk(y_true, k, dim=1)
+        weights = torch.full_like(y_true, fill_value=self.base_weight)
+        for i in range(B):
+            weights[i, top_indices[i]] = self.top5_weight
+
+        # Listwise: KL between softmax distributions
+        pred_probs = F.softmax(y_pred / self.temperature, dim=1)
+        target_probs = F.softmax(y_true / self.temperature, dim=1)
+        listwise_loss = -(target_probs * torch.log(pred_probs + 1e-12) * weights).sum(dim=1) / (weights.sum(dim=1) + 1e-12)
+
+        # Pairwise: sigmoid loss on all pairs
+        pred_diff = y_pred.unsqueeze(2) - y_pred.unsqueeze(1)
+        true_diff = y_true.unsqueeze(2) - y_true.unsqueeze(1)
+        mask = (true_diff != 0).float()
+        weight_matrix = weights.unsqueeze(2) + weights.unsqueeze(1)
+        pairwise_loss = torch.sigmoid(-pred_diff * torch.sign(true_diff))
+        weighted_pairwise = (pairwise_loss * mask * weight_matrix).sum(dim=[1, 2]) / mask.sum(dim=[1, 2]).clamp(min=1)
+
+        return (listwise_loss + self.pairwise_weight * weighted_pairwise).mean()
 
 
 class EMAWrapper:
@@ -594,8 +654,10 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
     use_amp = (scaler is not None) and (not use_sam)
     use_soft_topk_return = bool(config.get('use_soft_topk_return_loss', False))
     use_soft_rankic = bool(config.get('use_soft_rankic_loss', False))
+    use_margin_ranking = bool(config.get('use_margin_ranking_loss', False))
     topk_return_weight = float(config.get('soft_topk_return_weight', 1.0))
     rankic_weight = float(config.get('soft_rankic_weight', 0.2))
+    margin_ranking_weight = float(config.get('margin_ranking_weight', 0.3))
 
     if use_soft_topk_return:
         topk_loss_fn = SoftTopKReturnLoss(
@@ -611,6 +673,10 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
     rankic_loss_fn = MaskedSoftRankICLoss(
         temperature=float(config.get('soft_rankic_temperature', 0.5))
     ) if use_soft_rankic else None
+
+    margin_loss_fn = MarginRankingLoss(
+        margin=float(config.get('margin_ranking_margin', 0.1))
+    ) if use_margin_ranking else None
 
     def _compute_grouped_batch_loss(outputs, labels_batch, score_targets_batch, masks_batch):
         """Shared loss helper used by both standard and SAM passes."""
@@ -629,6 +695,8 @@ def train_ranking_model(model, dataloader, criterion, optimizer, device, epoch, 
                 group_loss = criterion(pred, label)
             if rankic_loss_fn is not None and rankic_weight > 0:
                 group_loss = group_loss + rankic_weight * rankic_loss_fn(pred, label, group_mask)
+            if margin_loss_fn is not None and margin_ranking_weight > 0:
+                group_loss = group_loss + margin_ranking_weight * margin_loss_fn(pred, label)
             group_losses.append(group_loss)
         if not group_losses:
             return None
@@ -754,8 +822,10 @@ def evaluate_ranking_model(model, dataloader, criterion, device, writer, epoch, 
     num_batches = 0
     use_soft_topk_return = bool(config.get('use_soft_topk_return_loss', False))
     use_soft_rankic = bool(config.get('use_soft_rankic_loss', False))
+    use_margin_ranking = bool(config.get('use_margin_ranking_loss', False))
     topk_return_weight = float(config.get('soft_topk_return_weight', 1.0))
     rankic_weight = float(config.get('soft_rankic_weight', 0.2))
+    margin_ranking_weight = float(config.get('margin_ranking_weight', 0.3))
 
     topk_loss_fn = SoftTopKReturnLoss(
         top_k=int(config.get('soft_topk_k', 5)),
@@ -767,6 +837,9 @@ def evaluate_ranking_model(model, dataloader, criterion, device, writer, epoch, 
     rankic_loss_fn = MaskedSoftRankICLoss(
         temperature=float(config.get('soft_rankic_temperature', 0.5))
     ) if use_soft_rankic else None
+    margin_loss_fn = MarginRankingLoss(
+        margin=float(config.get('margin_ranking_margin', 0.1))
+    ) if use_margin_ranking else None
 
     def _eval_grouped_batch_loss(outputs, labels_batch, score_targets_batch, masks_batch):
         group_losses = []
@@ -784,6 +857,8 @@ def evaluate_ranking_model(model, dataloader, criterion, device, writer, epoch, 
                 group_loss = criterion(pred, label)
             if rankic_loss_fn is not None and rankic_weight > 0:
                 group_loss = group_loss + rankic_weight * rankic_loss_fn(pred, label, group_mask)
+            if margin_loss_fn is not None and margin_ranking_weight > 0:
+                group_loss = group_loss + margin_ranking_weight * margin_loss_fn(pred, label)
             group_losses.append(group_loss)
         if not group_losses:
             return None
@@ -1038,21 +1113,32 @@ def main():
     print(f"模型参数量: {sum(p.numel() for p in model.parameters() if p.requires_grad)}")
     print(f"原始特征维度: {len(features)}, 有效输入维度: {eff_input_dim}")
 
-    use_smooth_ndcg = config.get("use_smooth_ndcg_loss", True)
-    criterion = SmoothNDCGLoss(
-        top_k=int(config.get("ndcg_top_k", 5)),
-        temperature=float(config.get("soft_sort_temperature", 0.5)),
-        delta_clip=float(config.get("lambda_delta_clip", 10.0)),
-        smooth_ndcg_weight=float(config.get("smooth_ndcg_weight", 0.7)),
-        lambda_pairwise_weight=float(config.get("lambda_pairwise_weight", 0.3)),
-        use_mse_aux=bool(config.get("use_mse_aux_loss", False)),
-        mse_aux_weight=float(config.get("mse_aux_weight", 0.05)),
-        temperature_start=float(config.get("temperature_anneal_start", 2.0)),
-        temperature_target=float(config.get("temperature_anneal_target", 0.5)),
-        temperature_anneal_epochs=int(config.get("temperature_anneal_epochs", 30)),
-    )
-    print(f"Using SmoothNDCGLoss (top_k={config['ndcg_top_k']}, "
-          f"temp={config['soft_sort_temperature']})")
+    use_weighted_ranking = bool(config.get('use_weighted_ranking_loss', False))
+    if use_weighted_ranking:
+        criterion = WeightedRankingLoss(
+            temperature=float(config.get('ranking_temperature', 0.07)),
+            k=int(config.get('predict_top_k', 5)),
+            top5_weight=float(config.get('top5_weight', 3.0)),
+            base_weight=float(config.get('base_weight', 1.0)),
+            pairwise_weight=float(config.get('pairwise_weight', 1)),
+        )
+        print(f"Using WeightedRankingLoss (temp={config.get('ranking_temperature', 0.07)})")
+    else:
+        use_smooth_ndcg = config.get("use_smooth_ndcg_loss", True)
+        criterion = SmoothNDCGLoss(
+            top_k=int(config.get("ndcg_top_k", 5)),
+            temperature=float(config.get("soft_sort_temperature", 0.5)),
+            delta_clip=float(config.get("lambda_delta_clip", 10.0)),
+            smooth_ndcg_weight=float(config.get("smooth_ndcg_weight", 0.7)),
+            lambda_pairwise_weight=float(config.get("lambda_pairwise_weight", 0.3)),
+            use_mse_aux=bool(config.get("use_mse_aux_loss", False)),
+            mse_aux_weight=float(config.get("mse_aux_weight", 0.05)),
+            temperature_start=float(config.get("temperature_anneal_start", 2.0)),
+            temperature_target=float(config.get("temperature_anneal_target", 0.5)),
+            temperature_anneal_epochs=int(config.get("temperature_anneal_epochs", 30)),
+        )
+        print(f"Using SmoothNDCGLoss (top_k={config['ndcg_top_k']}, "
+              f"temp={config['soft_sort_temperature']})")
 
     use_ema = bool(config.get("use_ema", False))
     ema_decay = float(config.get("ema_decay", 0.999))
@@ -1075,7 +1161,7 @@ def main():
 
     print(f"VSN={config.get('use_vsn', False)}, "
           f"MultiScale={config.get('use_multi_scale', False)}, "
-          f"SmoothNDCG={use_smooth_ndcg}")
+          f"SmoothNDCG={config.get('use_smooth_ndcg_loss', True)}")
     print(f"EMA={use_ema}, SWA={use_swa}, Mixup={use_mixup}, "
           f"LabelSmooth={use_label_smoothing}")
 
@@ -1105,40 +1191,29 @@ def main():
         scaler = None
         print("AMP disabled because SAM is enabled")
 
-    warmup_epochs = int(config.get('warmup_epochs', 5))
+    warmup_epochs = int(config.get('warmup_epochs',
+                       max(1, int(config['num_epochs'] * float(config.get('warmup_ratio', 0.05))))))
+    cosine_min_lr = float(config.get('cosine_min_lr_ratio', float(config.get('lr_min_factor', 0.01))))
     use_cosine_restarts = bool(config.get('use_cosine_restarts', False))
-    cosine_restart_T0 = int(config.get('cosine_restart_T0', 10))
-    cosine_restart_T_mult = int(config.get('cosine_restart_T_mult', 2))
     if use_cosine_restarts:
         scheduler = _create_warmup_cosine_restart_scheduler(
-            optimizer, warmup_epochs, T_0=cosine_restart_T0, T_mult=cosine_restart_T_mult,
-            min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
+            optimizer, warmup_epochs,
+            T_0=int(config.get('cosine_restart_T0', 10)),
+            T_mult=int(config.get('cosine_restart_T_mult', 2)),
+            min_lr_ratio=cosine_min_lr
         )
-        print(f"Cosine热重启: T_0={cosine_restart_T0}, T_mult={cosine_restart_T_mult}")
     else:
         scheduler = _create_warmup_cosine_scheduler(
             optimizer,
             warmup_epochs=warmup_epochs,
             total_epochs=config['num_epochs'],
-            min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
+            min_lr_ratio=cosine_min_lr
         )
 
     # 支持 num_epochs_override（用于 CV：固定 epoch 数，禁用 early stopping）
     num_epochs_override = config.get('_num_epochs_override')
     if num_epochs_override is not None:
         config['num_epochs'] = num_epochs_override
-        if use_cosine_restarts:
-            scheduler = _create_warmup_cosine_restart_scheduler(
-                optimizer, warmup_epochs, T_0=cosine_restart_T0, T_mult=cosine_restart_T_mult,
-                min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
-            )
-        else:
-            scheduler = _create_warmup_cosine_scheduler(
-                optimizer,
-                warmup_epochs=warmup_epochs,
-                total_epochs=num_epochs_override,
-                min_lr_ratio=float(config.get('cosine_min_lr_ratio', 0.01))
-            )
 
     accumulation_steps = int(config.get('gradient_accumulation_steps', 1))
     early_stopping_patience = int(config.get('early_stopping_patience', 15))
@@ -1166,10 +1241,8 @@ def main():
         for epoch in range(config['num_epochs']):
             print(f"\n=== Epoch {epoch+1}/{config['num_epochs']} ===")
 
-            if use_smooth_ndcg and hasattr(criterion, 'set_temperature'):
-                criterion.set_temperature(epoch, config['num_epochs'])
-                if epoch == 0 or epoch == config['num_epochs'] - 1:
-                    print(f"SmoothNDCG temperature: {criterion.current_temperature:.3f}")
+            if scheduler is not None and epoch > 0:
+                scheduler.step()
 
             train_loss, train_metrics = train_ranking_model(
                 model, train_loader, criterion, optimizer, device, epoch, writer,

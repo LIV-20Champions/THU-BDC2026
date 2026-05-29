@@ -39,6 +39,15 @@ config = {
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
+    '_num_epochs_override': 30,
+
+    # --- Loss & training ---
+    'use_smooth_ndcg_loss': False,
+    'smooth_ndcg_weight': 0.0,
+    'lambda_pairwise_weight': 0.0,
+    'use_margin_ranking_loss': False,
+    'margin_ranking_weight': 0.0,
+    'margin_ranking_margin': 0.1,
 
     'warmup_epochs': 5,
     'cosine_min_lr_ratio': 0.01,
@@ -88,6 +97,9 @@ config = {
     'use_smooth_ndcg_loss': False,
     'smooth_ndcg_weight': 0.0,
     'lambda_pairwise_weight': 0.0,
+    'use_margin_ranking_loss': False,
+    'margin_ranking_weight': 0.0,
+    'margin_ranking_margin': 0.1,
     'ndcg_top_k': 5,
     'soft_sort_temperature': 0.2,
     'temperature_anneal_start': 2.0,

@@ -562,4 +562,268 @@ def add_market_features(processed, feature_columns):
     if ret_col == '_ret':
         processed.drop(columns=['_ret'], inplace=True)
     print(f"市场特征已添加: market_ret_1d/5d/20d")
+    return processed, feature_columns
+
+
+def cross_sectional_rank_normalize(df, date_col='日期', feature_cols=None, skip_cols=None):
+    """Normalize features to [-1, 1] via cross-sectional percent-rank per day.
+
+    This removes market bull/bear noise and preserves only relative ordering
+    between stocks on each feature. Every feature on every day is transformed
+    independently to rank-percentile space.
+
+    Equivalent to the classmate's `use_cross_sectional_rank` approach.
+    """
+    result = df.copy()
+    skip_cols = set(skip_cols or ())
+    skip_cols.add(date_col)
+
+    if feature_cols is None:
+        candidates = list(result.columns)
+    else:
+        candidates = [col for col in feature_cols if col in result.columns]
+
+    rank_cols = [
+        col for col in candidates
+        if col not in skip_cols and pd.api.types.is_numeric_dtype(result[col])
+    ]
+    if not rank_cols:
+        return result
+
+    values = result[rank_cols].replace([np.inf, -np.inf], np.nan)
+    ranked = pd.DataFrame(0.0, index=result.index, columns=rank_cols, dtype=np.float64)
+
+    for _, day_index in result.groupby(date_col, sort=False).groups.items():
+        day_values = values.loc[day_index]
+        counts = day_values.notna().sum(axis=0)
+        ranks = day_values.rank(axis=0, method='average', na_option='keep')
+        for col in rank_cols:
+            count = int(counts[col])
+            if count <= 1:
+                ranked.loc[day_index, col] = 0.0
+                continue
+            ranked.loc[day_index, col] = (2.0 * (ranks[col] - 1.0) / float(count - 1) - 1.0)
+
+    result[rank_cols] = ranked
+    return result
+
+
+def engineer_features_alpha(df, windows=None):
+    """Compute Alpha-style features with configurable lookback windows.
+
+    This is engineer_features_158 generalized to accept a custom window list.
+    When windows=None, defaults to [5,10,20,30,60] (equivalent to engineer_features_158).
+    """
+    if windows is None:
+        windows = [5, 10, 20, 30, 60]
+    try:
+        import talib
+    except ImportError:
+        print("请安装TA-Lib库: pip install TA-Lib")
+        raise
+
+    df = df.copy()
+    open_ = df['开盘'].astype(float)
+    high = df['最高'].astype(float)
+    low = df['最低'].astype(float)
+    close = df['收盘'].astype(float)
+    volume = df['成交量'].astype(float)
+    vwap = df['成交额'] / (volume + 1e-12)
+
+    features = []
+    feature_names = []
+
+    # K-line features
+    features.extend([
+        (close - open_) / (open_ + 1e-12),
+        (high - low) / (open_ + 1e-12),
+        (close - open_) / (high - low + 1e-12),
+        (high - pd.concat([open_, close], axis=1).max(axis=1)) / (open_ + 1e-12),
+        (high - pd.concat([open_, close], axis=1).max(axis=1)) / (high - low + 1e-12),
+        (pd.concat([open_, close], axis=1).min(axis=1) - low) / (open_ + 1e-12),
+        (pd.concat([open_, close], axis=1).min(axis=1) - low) / (high - low + 1e-12),
+        (2 * close - high - low) / (open_ + 1e-12),
+        (2 * close - high - low) / (high - low + 1e-12)
+    ])
+    feature_names.extend(['KMID', 'KLEN', 'KMID2', 'KUP', 'KUP2', 'KLOW', 'KLOW2', 'KSFT', 'KSFT2'])
+
+    # Price-related
+    features.extend([open_ / (close + 1e-12), high / (close + 1e-12), low / (close + 1e-12), vwap / (close + 1e-12)])
+    feature_names.extend(['OPEN0', 'HIGH0', 'LOW0', 'VWAP0'])
+
+    # ROC
+    for w in windows:
+        features.append(close.shift(w) / (close + 1e-12))
+        feature_names.append(f'ROC{w}')
+
+    # MA
+    for w in windows:
+        features.append(talib.SMA(close, timeperiod=w) / (close + 1e-12))
+        feature_names.append(f'MA{w}')
+
+    # STD
+    for w in windows:
+        features.append(talib.STDDEV(close, timeperiod=w) / (close + 1e-12))
+        feature_names.append(f'STD{w}')
+
+    # Beta / RSQR / RESI
+    for w in windows:
+        slope = talib.LINEARREG_SLOPE(close, timeperiod=w)
+        features.append(slope / (close + 1e-12))
+        feature_names.append(f'BETA{w}')
+        tp = pd.Series(range(len(close)), index=close.index)
+        rc = close.rolling(w).corr(tp)
+        features.append(rc ** 2)
+        feature_names.append(f'RSQR{w}')
+        intercept = talib.LINEARREG_INTERCEPT(close, timeperiod=w)
+        predicted = slope * (w - 1) + intercept
+        features.append((close - predicted) / (close + 1e-12))
+        feature_names.append(f'RESI{w}')
+
+    # MAX / MIN
+    for w in windows:
+        features.append(talib.MAX(high, timeperiod=w) / (close + 1e-12))
+        feature_names.append(f'MAX{w}')
+    for w in windows:
+        features.append(talib.MIN(low, timeperiod=w) / (close + 1e-12))
+        feature_names.append(f'MIN{w}')
+
+    # Quantile
+    for w in windows:
+        features.append(close.rolling(w).quantile(0.8) / (close + 1e-12))
+        feature_names.append(f'QTLU{w}')
+    for w in windows:
+        features.append(close.rolling(w).quantile(0.2) / (close + 1e-12))
+        feature_names.append(f'QTLD{w}')
+
+    # Rank
+    for w in windows:
+        features.append(close.rolling(w).rank(pct=True))
+        feature_names.append(f'RANK{w}')
+
+    # RSV
+    for w in windows:
+        min_low = low.rolling(w).min()
+        max_high = high.rolling(w).max()
+        features.append((close - min_low) / (max_high - min_low + 1e-12))
+        feature_names.append(f'RSV{w}')
+
+    # IMAX / IMIN / IMXD
+    for w in windows:
+        features.append(high.rolling(w).apply(np.argmax, raw=True) / w)
+        feature_names.append(f'IMAX{w}')
+    for w in windows:
+        features.append(low.rolling(w).apply(np.argmin, raw=True) / w)
+        feature_names.append(f'IMIN{w}')
+    for w in windows:
+        imax = high.rolling(w).apply(np.argmax, raw=True)
+        imin = low.rolling(w).apply(np.argmin, raw=True)
+        features.append((imax - imin) / w)
+        feature_names.append(f'IMXD{w}')
+
+    # Correlation
+    log_volume = np.log(volume + 1)
+    for w in windows:
+        features.append(talib.CORREL(close, log_volume, timeperiod=w))
+        feature_names.append(f'CORR{w}')
+    close_ret = close / close.shift(1)
+    volume_ret = volume / (volume.shift(1) + 1e-12)
+    log_volume_ret = np.log(volume_ret + 1)
+    for w in windows:
+        cr = pd.concat([close_ret, log_volume_ret], axis=1).fillna(0)
+        features.append(talib.CORREL(cr.iloc[:, 0], cr.iloc[:, 1], timeperiod=w))
+        feature_names.append(f'CORD{w}')
+
+    # Count
+    cd_pos = (close > close.shift(1))
+    cd_neg = (close < close.shift(1))
+    for w in windows:
+        features.append(cd_pos.rolling(w).mean())
+        feature_names.append(f'CNTP{w}')
+    for w in windows:
+        features.append(cd_neg.rolling(w).mean())
+        feature_names.append(f'CNTN{w}')
+    for w in windows:
+        features.append(cd_pos.rolling(w).mean() - cd_neg.rolling(w).mean())
+        feature_names.append(f'CNTD{w}')
+
+    # Sum price change
+    cd_abs = (close - close.shift(1)).abs()
+    cd_up = (close - close.shift(1)).clip(lower=0)
+    cd_down = -(close - close.shift(1)).clip(upper=0)
+    for w in windows:
+        features.append(cd_up.rolling(w).sum() / (cd_abs.rolling(w).sum() + 1e-12))
+        feature_names.append(f'SUMP{w}')
+    for w in windows:
+        features.append(cd_down.rolling(w).sum() / (cd_abs.rolling(w).sum() + 1e-12))
+        feature_names.append(f'SUMN{w}')
+    for w in windows:
+        features.append((cd_up.rolling(w).sum() - cd_down.rolling(w).sum()) / (cd_abs.rolling(w).sum() + 1e-12))
+        feature_names.append(f'SUMD{w}')
+
+    # Volume
+    for w in windows:
+        features.append(talib.SMA(volume, timeperiod=w) / (volume + 1e-12))
+        feature_names.append(f'VMA{w}')
+    for w in windows:
+        features.append(talib.STDDEV(volume, timeperiod=w) / (volume + 1e-12))
+        feature_names.append(f'VSTD{w}')
+
+    # Weighted volume
+    vwr = (close / close.shift(1) - 1).abs() * volume
+    for w in windows:
+        mv = vwr.rolling(w).mean()
+        sv = vwr.rolling(w).std()
+        features.append(sv / (mv + 1e-12))
+        feature_names.append(f'WVMA{w}')
+
+    # Volume change sum
+    vd_abs = (volume - volume.shift(1)).abs()
+    vd_up = (volume - volume.shift(1)).clip(lower=0)
+    vd_down = -(volume - volume.shift(1)).clip(upper=0)
+    for w in windows:
+        features.append(vd_up.rolling(w).sum() / (vd_abs.rolling(w).sum() + 1e-12))
+        feature_names.append(f'VSUMP{w}')
+    for w in windows:
+        features.append(vd_down.rolling(w).sum() / (vd_abs.rolling(w).sum() + 1e-12))
+        feature_names.append(f'VSUMN{w}')
+    for w in windows:
+        features.append((vd_up.rolling(w).sum() - vd_down.rolling(w).sum()) / (vd_abs.rolling(w).sum() + 1e-12))
+        feature_names.append(f'VSUMD{w}')
+
+    fdf = pd.concat(features, axis=1)
+    fdf.columns = feature_names
+    df = pd.concat([df, fdf], axis=1)
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df.fillna(method='ffill', inplace=True)
+    df.fillna(0, inplace=True)
+    return df
+
+
+def engineer_features_100plus39(df):
+    """100+39 feature set: distilled Alpha (windows 10/20/30) + 39 TA-Lib.
+
+    Removes redundant window-5/60 from the full 158 set.
+
+    NOTE: engineer_features_158 = basic TA-Lib indicators (39-dim),
+          engineer_features_39 = Alpha factors (158-dim). The naming is misleading.
+    """
+    df_copy = df.copy()
+    df_alpha = engineer_features_alpha(df_copy, windows=[10, 20, 30])
+    df_39 = engineer_features_158(df_copy)  # Actual TA-Lib 39 indicators
+
+    feature_cols_39 = [
+        'sma_5', 'sma_20', 'ema_12', 'ema_26', 'rsi', 'macd', 'macd_signal',
+        'volume_change', 'obv', 'volume_ma_5', 'volume_ma_20', 'volume_ratio',
+        'kdj_k', 'kdj_d', 'kdj_j', 'boll_mid', 'boll_std', 'atr_14', 'ema_60',
+        'volatility_10', 'volatility_20', 'return_1', 'return_5', 'return_10',
+        'high_low_spread', 'open_close_spread', 'high_close_spread', 'low_close_spread'
+    ]
+    feature_cols_39_exist = [col for col in feature_cols_39 if col in df_39.columns]
+    df_final = pd.concat([df_alpha, df_39[feature_cols_39_exist]], axis=1)
+    df_final = df_final.loc[:, ~df_final.columns.duplicated()]
+    df_final.replace([np.inf, -np.inf], np.nan, inplace=True)
+    df_final.fillna(method='ffill', inplace=True)
+    df_final.fillna(0, inplace=True)
+    return df_final
     return processed, columns

@@ -3,7 +3,8 @@
     "allow": [
       "Bash(wsl *)",
       "WebSearch",
-      "WebFetch(domain:zread.ai)"
+      "WebFetch(domain:zread.ai)",
+      "WebFetch(domain:arxiv.org)"
     ]
   }
 }

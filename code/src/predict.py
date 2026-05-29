@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from config import config, feature_columns_map, feature_engineer_func_map, get_scale_features, get_eff_input_dim
 from model import StockTransformer
-from utils import per_stock_sliding_zscore, build_cross_sectional_features, add_market_features
+from utils import per_stock_sliding_zscore, build_cross_sectional_features, add_market_features, cross_sectional_rank_normalize
 
 
 def preprocess_predict_data(df, stockid2idx):
@@ -34,6 +34,16 @@ def preprocess_predict_data(df, stockid2idx):
     processed = processed.dropna(subset=['instrument']).copy()
     processed['instrument'] = processed['instrument'].astype(np.int64)
     processed['日期'] = pd.to_datetime(processed['日期'])
+
+    if config.get('use_cross_sectional_rank', False):
+        processed = cross_sectional_rank_normalize(
+            processed,
+            date_col='日期',
+            feature_cols=[f for f in feature_columns if f != 'instrument'],
+            skip_cols=set(config.get('cross_sectional_rank_skip_cols', ['instrument'])),
+        )
+        print("推理: 特征截面Rank归一化已完成")
+
     processed, feature_columns = add_market_features(processed, feature_columns)
 
     return processed, feature_columns

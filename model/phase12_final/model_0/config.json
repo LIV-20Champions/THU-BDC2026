@@ -6,7 +6,7 @@
     "dim_feedforward": 256,
     "batch_size": 2,
     "max_stocks_per_sample": 100,
-    "num_epochs": 30,
+    "num_epochs": 60,
     "learning_rate": 5e-05,
     "dropout": 0.35,
     "feature_num": "39",
