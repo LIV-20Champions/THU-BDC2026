@@ -9,7 +9,7 @@ from tqdm import tqdm
 from tensorboardX import SummaryWriter
 from config import config, feature_columns_map, feature_engineer_func_map, get_scale_features, get_eff_input_dim
 from model import StockTransformer
-from utils import LazyRankingDataset
+from utils import LazyRankingDataset, add_market_features
 import joblib
 import os
 import json
@@ -89,8 +89,6 @@ def _build_label_and_clean(processed, drop_small_open=True, label_alpha=0.3):
     processed['score_target'] = ret_t1t5
 
     # --- CSZScoreNorm + DropExtremeLabel (per trading day) ---
-    # Drop top/bottom 2.5% extreme labels, then z-score normalize within each day.
-    # This removes event-driven outliers and makes label scale consistent across days.
     processed['_date_tmp'] = processed['日期'].copy()
     for date, group in processed.groupby('_date_tmp'):
         day_idx = group.index
@@ -98,14 +96,12 @@ def _build_label_and_clean(processed, drop_small_open=True, label_alpha=0.3):
         n = len(labels)
         if n < 20:
             continue
-        # DropExtremeLabel: mask top 2.5% and bottom 2.5%
         sorted_idx = np.argsort(labels)
         drop_n = int(0.025 * n)
         if drop_n > 0:
             drop_mask = np.concatenate([sorted_idx[:drop_n], sorted_idx[-drop_n:]])
             processed.loc[day_idx[drop_mask], 'label'] = np.nan
             processed.loc[day_idx[drop_mask], 'score_target'] = np.nan
-        # CSZScoreNorm: z-score the remaining labels within this day
         valid = processed.loc[day_idx, 'label'].notna()
         if valid.sum() < 10:
             continue
@@ -149,6 +145,7 @@ def _preprocess_common(df, stockid2idx, desc, drop_small_open=True):
 
     label_alpha = float(config.get('label_alpha', 0.3))
     processed = _build_label_and_clean(processed, drop_small_open=drop_small_open, label_alpha=label_alpha)
+    processed, feature_columns = add_market_features(processed, feature_columns)
     return processed, feature_columns
 
 
@@ -1187,6 +1184,17 @@ def main():
             print(f"Train Loss: {train_loss:.4f}")
             for k, v in train_metrics.items():
                 print(f"Train {k}: {v:.4f}")
+
+            # Train loss threshold stop (MASTER-style)
+            train_stop_thred = config.get('train_stop_loss_thred')
+            if train_stop_thred is not None and train_loss <= float(train_stop_thred):
+                print(f"\n训练停止！Train loss {train_loss:.4f} <= 阈值 {train_stop_thred}")
+                torch.save(model.state_dict(), os.path.join(output_dir, 'best_model.pth'))
+                if ema_wrapper is not None:
+                    torch.save(ema_wrapper.shadow, os.path.join(output_dir, 'best_model_ema.pth'))
+                best_epoch = epoch + 1
+                best_score = train_loss
+                break
 
             if no_val:
                 # 无验证集模式：每 epoch 保存模型

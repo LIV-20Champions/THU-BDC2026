@@ -1,0 +1,3 @@
+Best epoch: 2
+Selection metric: official_score_eq
+Best score: 0.004349

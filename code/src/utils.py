@@ -536,3 +536,30 @@ class LazyRankingDataset(torch.utils.data.Dataset):
             'relevance': torch.from_numpy(relevance_sub.astype(np.float32)),
             'stock_indices': torch.from_numpy(stock_indices_sub.astype(np.int64)),
         }
+
+
+def add_market_features(processed, feature_columns):
+    """Add equal-weighted market return features (MASTER-style).
+
+    Computes daily average return across all stocks and its rolling means.
+    These are shared by all stocks — like an index proxy.
+    """
+    if processed['日期'].nunique() <= 1:
+        return processed, feature_columns
+    import numpy as np
+    ret_col = '涨跌幅' if '涨跌幅' in processed.columns else None
+    if ret_col is None:
+        processed['_ret'] = (processed['收盘'] - processed['开盘']) / (processed['开盘'] + 1e-12)
+        ret_col = '_ret'
+    daily_market = processed.groupby('日期')[ret_col].mean().rename('market_ret_1d')
+    processed = processed.merge(daily_market, on='日期', how='left')
+    processed['market_ret_5d'] = processed.groupby('股票代码')['market_ret_1d'].transform(
+        lambda x: x.rolling(5, min_periods=1).mean())
+    processed['market_ret_20d'] = processed.groupby('股票代码')['market_ret_1d'].transform(
+        lambda x: x.rolling(20, min_periods=1).mean())
+    columns = feature_columns + ['market_ret_1d', 'market_ret_5d', 'market_ret_20d']
+    processed = processed.dropna(subset=['market_ret_1d'])
+    if ret_col == '_ret':
+        processed.drop(columns=['_ret'], inplace=True)
+    print(f"市场特征已添加: market_ret_1d/5d/20d")
+    return processed, columns

@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from config import config, feature_columns_map, feature_engineer_func_map, get_scale_features, get_eff_input_dim
 from model import StockTransformer
-from utils import per_stock_sliding_zscore, build_cross_sectional_features
+from utils import per_stock_sliding_zscore, build_cross_sectional_features, add_market_features
 
 
 def preprocess_predict_data(df, stockid2idx):
@@ -34,6 +34,7 @@ def preprocess_predict_data(df, stockid2idx):
     processed = processed.dropna(subset=['instrument']).copy()
     processed['instrument'] = processed['instrument'].astype(np.int64)
     processed['日期'] = pd.to_datetime(processed['日期'])
+    processed, feature_columns = add_market_features(processed, feature_columns)
 
     return processed, feature_columns
 

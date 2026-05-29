@@ -10,7 +10,7 @@ config = {
     'dim_feedforward': 256,
     'batch_size': 2,
     'max_stocks_per_sample': 100,
-    'num_epochs': 15,
+    'num_epochs': 60,
     'learning_rate': 5e-5,
     'dropout': 0.35,
     'feature_num': feature_num,
@@ -34,7 +34,8 @@ config = {
 
     'label_alpha': 0.3,
     'selected_top_k_features': 0,
-    'output_dir': './model/phase12_daily',
+    'output_dir': './model/phase12_final',
+    'train_stop_loss_thred': 0.01,
     'ensemble_model_dirs': [],
     'data_path': './data',
     'val_months': 2,
