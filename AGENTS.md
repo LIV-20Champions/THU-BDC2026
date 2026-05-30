@@ -1,6 +1,6 @@
-# AGENTS.md
+# CLAUDE.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project overview
 
@@ -99,14 +99,48 @@ Final submission is a Docker image exported as `.tar`. Inside the container, `da
 
 - Worktree 隔离不可用，所有开发在主会话内联执行
 
+## 当前基线 (Phase 12)
+
+- **配置**: CSZScoreNorm + DropExtremeLabel + DailyBatchSampler, AdamW, SmoothNDCG loss, 60 epochs, 5-model ensemble (seeds 42,49,56,63,70)
+- **原始数据集** (`stock_data.csv`, 2024.01-2026.03): self-score **0.0504**
+- **April 数据集** (`stock_data_April.csv`, 2024.01-2026.04): self-score **0.0018**
+- **训练耗时**: ~30 秒/轮 (GPU), 512 epochs
+
+## 数据集约束
+
+- `data/stock_data.csv` 和 `data/stock_data_April.csv` 是两套独立数据集，不做针对单一数据集的特殊优化
+- 模型需在两个数据集上都 >= 0.04，泛化能力是核心目标
+- 训练集本身信息量足够覆盖两个数据集的时间范围——问题在模型如何利用数据，不在数据不够
+
+## 自动优化工作流
+
+入口: `/auto-optimize` skill（详见 `.claude/skills/auto-optimize/SKILL.md`）
+
+**阶段**: 搜索行业方案 → 分析代码热点 → 制定优化计划 → 执行（广度扫描→深度挖掘）→ 报告
+
+**门禁标准**:
+| 层级 | 触发 | 通过标准 | 失败处理 |
+|------|------|---------|---------|
+| L1 快验 | 每次改动 | 5 epoch, loss 不炸, score std > 0.05 | 回滚，不进入完整训练 |
+| L2 完整 | L1 通过 | 原始 self-score >= 0.04 | 标记无效，回滚 |
+| L3 跨集 | L2 通过 | 原始 >= 0.04 且 April >= 0.04 | 保留但不作主方向 |
+
+**约束**:
+- 单轮优化 <= 2 分钟，性价比优先，不引入过于复杂的优化
+- 搜索策略：先广度扫描（每轮 1 分钟内）锁定方向，再深度挖掘
+- 自主权限：参数调优全自主；新增特征/改模型结构通知后执行；换数据/换架构范式必须批准
+- 实验记录：精简版，只记分数和结论（`股价预测/experiments/`）
+- 总时间预算：3 小时
+
 ## 实验经验
 
-- **分数确定性**：5 模型集成 + 固定 seeds (42,49,56,63,70) 下分数 0.0673 完全可复现。改特征集/embedding/架构参数均不影响最终排序——这是当前数据的信息天花板
+- **Phase 12 是当前最优**: CSZScoreNorm + DailyBatch 使训练 14+ epoch 不崩，但 April 数据集几乎零收益
+- **分数确定性**：5 模型集成 + 固定 seeds 下分数完全可复现。改特征集/embedding/架构参数在 422 样本上均不改善——需要从方法层面突破
 - **验证集反相关**：val score 与 test self-score 负相关。不要用 val score 选模型——用固定 epoch 数或取末轮模型
-- **SAM 约束**：启用 SAM 时 gradient_accumulation_steps 必须为 1，代码未自动强制。SAM 的二次前向传播与梯度累积冲突
+- **SAM 有害**：SAM 导致 score 崩坏（std 0.33→0.017），与此模型/数据不兼容
 - **特征函数命名**：engineer_features_158 实际生成 ~39 特征，engineer_features_39 实际生成 ~158 特征。feature_engineer_func_map 的 key 是权威入口
 - **大参数均退化**：VSN (+300K)、MultiScale (+200K) 在 422 样本上无论如何都会退化。SAM 无法挽救参数量过大
-- **158+39/横截面特征不增效**：在 SAM 下无害但也不提升分数，说明 39 维特征已包含全部有效信号
+- **特征增量不增效**：158+39 特征、横截面特征、市场特征均未提升 Phase 12 基线——任何特征添加都需在 Phase 12 配置下验证
 
 ## 调试注意事项
 
